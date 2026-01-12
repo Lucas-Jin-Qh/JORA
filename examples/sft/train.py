@@ -31,6 +31,54 @@ class ModelArguments:
         default="q_proj,k_proj,v_proj,o_proj,down_proj,up_proj,gate_proj",
         metadata={"help": "comma separated list of target modules to apply LoRA layers to"},
     )
+    use_peft_jora: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Enables PEFT JORA for training."},
+    )
+    jora_s_l: Optional[int] = field(
+        default=32,
+        metadata={"help": "Left rotation matrix dimension for JORA."},
+    )
+    jora_s_r: Optional[int] = field(
+        default=32,
+        metadata={"help": "Right rotation matrix dimension for JORA."},
+    )
+    jora_k: Optional[int] = field(
+        default=8,
+        metadata={"help": "Selection parameter k for JORA sparse selection."},
+    )
+    jora_rotation_param: Optional[str] = field(
+        default="cayley",
+        metadata={"help": "Rotation parameterization for JORA ('cayley' or 'angle')."},
+    )
+    jora_rotation_impl: Optional[str] = field(
+        default="auto",
+        metadata={"help": "Rotation implementation for JORA ('auto', 'torch', 'triton')."},
+    )
+    jora_selection_type: Optional[str] = field(
+        default="topk_ema",
+        metadata={"help": "Parameter selection type for JORA ('topk_ema', 'random', 'none')."},
+    )
+    jora_magnitude: Optional[str] = field(
+        default="ecd_tanh",
+        metadata={"help": "Magnitude scaling type for JORA ('ecd_tanh', 'oer_softmax', 'none')."},
+    )
+    jora_update_interval: Optional[int] = field(
+        default=1,
+        metadata={"help": "Update interval for JORA parameter selection."},
+    )
+    jora_ema_update_interval: Optional[int] = field(
+        default=1,
+        metadata={"help": "EMA update interval for JORA."},
+    )
+    jora_selection_group_size: Optional[int] = field(
+        default=1,
+        metadata={"help": "Group size for JORA selection sharing (1 = per-module, >1 = grouped)."},
+    )
+    jora_selection_group_by: Optional[str] = field(
+        default="dimension",
+        metadata={"help": "Grouping strategy for JORA selection ('dimension', 'type', 'none')."},
+    )
     use_nested_quant: Optional[bool] = field(
         default=False,
         metadata={"help": "Activate nested quantization for 4bit base models"},
@@ -70,6 +118,10 @@ class ModelArguments:
     use_unsloth: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables UnSloth for training."},
+    )
+    torch_dtype: Optional[str] = field(
+        default="auto",
+        metadata={"help": "Model dtype: auto, float16, bfloat16, float32"},
     )
 
 
@@ -152,5 +204,4 @@ if __name__ == "__main__":
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-    model_args.max_length = training_args.max_length
     main(model_args, data_args, training_args)

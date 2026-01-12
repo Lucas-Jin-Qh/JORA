@@ -12,7 +12,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
-from peft import LoraConfig
+from peft import LoraConfig, JoraConfig
 
 
 DEFAULT_CHATML_CHAT_TEMPLATE = "{% for message in messages %}\n{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% if loop.last and add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}{% endfor %}"
@@ -52,6 +52,17 @@ def create_datasets(tokenizer, data_args, training_args, apply_chat_template=Fal
             batch.append(tokenizer.apply_chat_template(conversation, tokenize=False))
         return {"content": batch}
 
+    def preprocess_alpaca(samples):
+        """预处理Alpaca数据集，将instruction+input+output组合成单个文本"""
+        batch = []
+        for instruction, input_text, output in zip(samples["instruction"], samples["input"], samples["output"]):
+            if input_text.strip():  # 如果有输入
+                text = f"Instruction: {instruction}\nInput: {input_text}\nOutput: {output}"
+            else:  # 如果没有输入
+                text = f"Instruction: {instruction}\nOutput: {output}"
+            batch.append(text)
+        return {"text": batch}
+
     raw_datasets = DatasetDict()
     for split in data_args.splits.split(","):
         try:
@@ -74,10 +85,25 @@ def create_datasets(tokenizer, data_args, training_args, apply_chat_template=Fal
             batched=True,
             remove_columns=raw_datasets["train"].column_names,
         )
+    elif data_args.dataset_name == "yahma/alpaca-cleaned":
+        # 特殊处理Alpaca数据集
+        raw_datasets = raw_datasets.map(
+            preprocess_alpaca,
+            batched=True,
+            remove_columns=raw_datasets["train"].column_names,
+        )
 
     train_data = raw_datasets["train"]
-    valid_data = raw_datasets["test"]
-    print(f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}")
+    # Handle datasets without test split (e.g., Alpaca)
+    if "test" in raw_datasets:
+        valid_data = raw_datasets["test"]
+        print(f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}")
+    else:
+        # Use a portion of train data as validation if no test split exists
+        train_valid_split = train_data.train_test_split(test_size=0.05, seed=42)
+        train_data = train_valid_split["train"]
+        valid_data = train_valid_split["test"]
+        print(f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)} (created from train split)")
     print(f"A sample of train dataset: {train_data[0]}")
 
     return train_data, valid_data
@@ -126,12 +152,26 @@ def create_and_prepare_model(args, data_args, training_args):
         # Load model
         model, _ = FastLanguageModel.from_pretrained(
             model_name=args.model_name_or_path,
-            max_seq_length=training_args.max_length,
+            max_seq_length=training_args.max_seq_length or 2048,
             dtype=None,
             load_in_4bit=args.use_4bit_quantization,
         )
     else:
-        dtype = quant_storage_dtype if quant_storage_dtype and quant_storage_dtype.is_floating_point else torch.float32
+        # Determine model dtype
+        if args.torch_dtype == "auto":
+            # Auto mode: use bfloat16 for flash attention, otherwise float32
+            if args.use_flash_attn:
+                dtype = torch.bfloat16
+            else:
+                dtype = quant_storage_dtype if quant_storage_dtype and quant_storage_dtype.is_floating_point else torch.float32
+        elif args.torch_dtype == "float16":
+            dtype = torch.float16
+        elif args.torch_dtype == "bfloat16":
+            dtype = torch.bfloat16
+        elif args.torch_dtype == "float32":
+            dtype = torch.float32
+        else:
+            raise ValueError(f"Unsupported torch_dtype: {args.torch_dtype}")
 
         # Prepare model loading arguments
         model_kwargs = {
@@ -153,7 +193,25 @@ def create_and_prepare_model(args, data_args, training_args):
 
     peft_config = None
     chat_template = None
-    if args.use_peft_lora and not args.use_unsloth:
+    if args.use_peft_jora and not args.use_peft_lora and not args.use_unsloth:
+        peft_config = JoraConfig(
+            target_modules=args.lora_target_modules.split(",")
+            if args.lora_target_modules != "all-linear"
+            else args.lora_target_modules,
+            S_L=args.jora_s_l,
+            S_R=args.jora_s_r,
+            k=args.jora_k,
+            rotation_param=args.jora_rotation_param,
+            rotation_impl=args.jora_rotation_impl,
+            selection=args.jora_selection_type,
+            magnitude=args.jora_magnitude,
+            update_interval=args.jora_update_interval,
+            ema_update_interval=args.jora_ema_update_interval,
+            selection_group_size=args.jora_selection_group_size,
+            selection_group_by=args.jora_selection_group_by,
+            inference_mode=False,
+        )
+    elif args.use_peft_lora and not args.use_unsloth:
         peft_config = LoraConfig(
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
@@ -213,7 +271,7 @@ def create_and_prepare_model(args, data_args, training_args):
             else args.lora_target_modules,
             use_gradient_checkpointing=training_args.gradient_checkpointing,
             random_state=training_args.seed,
-            max_seq_length=training_args.max_length,
+            max_seq_length=training_args.max_seq_length or 2048,
         )
 
     return model, peft_config, tokenizer

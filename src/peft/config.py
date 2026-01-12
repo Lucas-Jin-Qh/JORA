@@ -199,7 +199,10 @@ class PeftConfigMixin(PushToHubMixin):
             config_cls = cls
 
         try:
-            config = config_cls(**kwargs)
+            # Remove peft_type from kwargs as Config classes don't accept it in __init__
+            kwargs_copy = kwargs.copy()
+            kwargs_copy.pop("peft_type", None)
+            config = config_cls(**kwargs_copy)
         except TypeError as exc:
             # Here we potentially handle forward compatibility. Sometimes new keywords are added to configs, which makes
             # new configs incompatible with older PEFT versions. We catch these and remove them to allow the program to

@@ -30,6 +30,7 @@ from .mapping import (
     PEFT_TYPE_TO_MIXED_MODEL_MAPPING,
     PEFT_TYPE_TO_TUNER_MAPPING,
     get_peft_config,
+    get_peft_config_from_string,
     inject_adapter_in_model,
 )
 from .mapping_func import get_peft_model
@@ -73,6 +74,9 @@ from .tuners import (
     HRAModel,
     IA3Config,
     IA3Model,
+    JoraConfig,
+    JoraLayer,
+    JoraModel,
     LNTuningConfig,
     LNTuningModel,
     LoftQConfig,

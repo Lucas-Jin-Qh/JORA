@@ -1,6 +1,9 @@
 # Supervised Fine-tuning (SFT) with PEFT
 In this example, we'll see how to use [PEFT](https://github.com/huggingface/peft) to perform SFT using PEFT on various distributed setups.
 
+## Single GPU SFT with JORA
+[JORA](https://arxiv.org/abs/2402.01780) (Joint Orthogonal Rotation Adaptation) is a parameter-efficient fine-tuning method that combines orthogonal rotations with sparse parameter selection for better adaptation with fewer trainable parameters. The command to use JORA is present at [run_peft_jora.sh](https://github.com/huggingface/peft/blob/main/scripts/run_peft_jora.sh).
+
 ## Single GPU SFT with QLoRA
 QLoRA uses 4-bit quantization of the base model to drastically reduce the GPU memory consumed by the base model while using LoRA for parameter-efficient fine-tuning. The command to use QLoRA is present at [run_peft.sh](https://github.com/huggingface/peft/blob/main/examples/sft/run_peft.sh).
 

@@ -41,7 +41,37 @@ def get_peft_config(config_dict: dict[str, Any]) -> PeftConfig:
         config_dict (`Dict[str, Any]`): Dictionary containing the configuration parameters.
     """
 
-    return PEFT_TYPE_TO_CONFIG_MAPPING[config_dict["peft_type"]](**config_dict)
+    config_dict = config_dict.copy()
+    peft_type = config_dict.pop("peft_type")
+    return PEFT_TYPE_TO_CONFIG_MAPPING[peft_type](**config_dict)
+
+
+def get_peft_config_from_string(peft_type: str, **kwargs) -> PeftConfig:
+    """
+    Returns a Peft config object from a string and keyword arguments.
+
+    Args:
+        peft_type (`str`): The PEFT method type (e.g., "lora", "jora").
+        **kwargs: Configuration parameters for the PEFT method.
+
+    Returns:
+        PeftConfig: The PEFT configuration object.
+
+    Example:
+        ```python
+        config = get_peft_config_from_string("jora", S_L=32, S_R=32, k=8)
+        ```
+    """
+    from peft.utils import PeftType
+
+    # Convert string to PeftType enum
+    try:
+        peft_type_enum = getattr(PeftType, peft_type.upper())
+    except AttributeError:
+        available_types = [t.value for t in PeftType]
+        raise ValueError(f"Unknown PEFT type '{peft_type}'. Available types: {available_types}")
+
+    return PEFT_TYPE_TO_CONFIG_MAPPING[peft_type_enum](**kwargs)
 
 
 def inject_adapter_in_model(
