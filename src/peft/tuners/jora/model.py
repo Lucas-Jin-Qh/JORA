@@ -29,11 +29,14 @@ class JoraModel(BaseTuner):
     def __init__(self, model: nn.Module, peft_config: JoraConfig, adapter_name: str = "default"):
         super().__init__(model, peft_config, adapter_name)
 
-        # Auto-step: make JORA work with standard HF Trainer loops without manual calls.
+        # Callback-driven: Use JoraTrainerCallback for reliable updates instead of broken backward hooks.
+        # The original backward hook approach failed because PyTorch hooks don't trigger on ModelOutput.
         self._jora_global_step: int = 0
         self._jora_total_steps: int | None = None
         self._jora_layers: list[JoraLayer] = [m for m in self.model.modules() if isinstance(m, JoraLayer)]
-        self._jora_hook_handle = self.model.register_full_backward_hook(self._jora_post_backward_hook)
+
+        # Lazy initialization of selection groups
+        self._selection_groups = None
 
         # If distributed is initialized, sparse selection can leave some params unused per step.
         # Users should set ddp_find_unused_parameters=True (HF TrainingArguments) to avoid DDP errors.
@@ -63,7 +66,14 @@ class JoraModel(BaseTuner):
     def _group_layers_for_selection(self):
         """Group layers for shared selection to reduce computation."""
         if not hasattr(self, '_selection_groups') or not self._selection_groups:
-            cfg = self._jora_layers[0].cfg if self._jora_layers else None
+            cfg = None
+            if self._jora_layers:
+                # Get cfg from the first adapter of the first layer
+                first_layer = self._jora_layers[0]
+                if hasattr(first_layer, 'adapters') and first_layer.adapters:
+                    adapter_name = list(first_layer.adapters.keys())[0]
+                    cfg = first_layer.adapters[adapter_name].cfg
+
             if not cfg:
                 self._selection_groups = [self._jora_layers]
                 return
@@ -138,7 +148,11 @@ class JoraModel(BaseTuner):
         if not self._jora_layers:
             return
 
-        cfg = self._jora_layers[0].cfg
+        cfg = None
+        first_layer = self._jora_layers[0]
+        if hasattr(first_layer, 'adapters') and first_layer.adapters:
+            adapter_name = list(first_layer.adapters.keys())[0]
+            cfg = first_layer.adapters[adapter_name].cfg
         update_interval = int(getattr(cfg, 'update_interval', 1))
 
         # Update only when needed (dramatically reduce call frequency)

@@ -172,9 +172,18 @@ def main(model_args, data_args, training_args):
     )
 
     # trainer
+    callbacks = []
+    if model_args.use_peft_jora:
+        # Import JORA callback for reliable updates
+        from peft.tuners.jora.callbacks import JoraTrainerCallback
+        callbacks.append(JoraTrainerCallback(model, verbose=False))
+
+    # Add callbacks to training args instead of passing directly to SFTTrainer
+    if callbacks:
+        training_args.callbacks = callbacks
+
     trainer = SFTTrainer(
         model=model,
-        processing_class=tokenizer,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

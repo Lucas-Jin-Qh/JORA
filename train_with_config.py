@@ -116,7 +116,7 @@ def create_training_command(
             f"--lora_target_modules {','.join(peft_config['target_modules'])}"
         ])
 
-    cmd_parts.append("--use_flash_attn True")
+    # cmd_parts.append("--use_flash_attn True")  # 需要额外安装flash_attn包
 
     # 添加量化相关参数（如果启用）
     if use_4bit:
