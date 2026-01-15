@@ -11,6 +11,7 @@ RotationImpl = Literal["auto", "triton", "torch"]
 CoreType = Literal["diag", "block", "lowrank"]
 SelectionType = Literal["topk_ema", "random", "none"]
 MagnitudeType = Literal["none", "ecd_tanh", "oer_softmax"]
+PairingStrategy = Literal["consecutive", "high_low"]
 
 @dataclass
 class JoraConfig(PeftConfig):
@@ -56,7 +57,6 @@ class JoraConfig(PeftConfig):
     # ---- JORA: rotation ----
     S_L: int = 32
     S_R: int = 32
-    k: int = 8
 
     rotation_param: RotationParam = "cayley"
     rotation_impl: RotationImpl = "auto"
@@ -76,12 +76,15 @@ class JoraConfig(PeftConfig):
     lr_core: float = 0.01   # Core learning rate
 
     # ---- JORA: pair selection / schedule ----
+    k: int = 8  # Maximum number of pairs to select (independent of S_L/S_R dimensions)
     selection: SelectionType = "topk_ema"
+    pairing_strategy: PairingStrategy = "consecutive"  # Pairing strategy: "consecutive" or "high_low"
     ema_beta: float = 0.98
     warmup_steps: int = 0  # 0 disables warmup gating
     warmup_ratio: float = 0.0  # if >0 and total_steps is provided, warmup_steps = int(total_steps*warmup_ratio)
     update_interval: int = 1  # update selection every N forward steps
-    ema_update_interval: int = 1  # update EMA statistics every N forward steps
+    ema_update_interval: int = 1  # update activation EMA statistics every N forward steps
+    ema_grad_interval: int = 1  # update gradient EMA statistics every N backward steps
     use_gumbel: bool = False
     gumbel_tau: float = 1.0
 
@@ -119,25 +122,56 @@ class JoraConfig(PeftConfig):
     single_sided: Literal["none", "left", "right"] = "none"
     eps: float = 1e-8
 
+    # ---- Legacy compatibility fields (deprecated) ----
+    # These fields are kept for backward compatibility with older configs
+    # They will be automatically mapped to their modern equivalents with warnings
+    ablate_ecd: bool = False
+    use_ecd: bool = False
+    use_cayley: Optional[bool] = None
+
     def __post_init__(self):
         # Call parent __post_init__ if it exists (compat with different PEFT versions)
         parent_post = getattr(super(), "__post_init__", None)
         if callable(parent_post):
             parent_post()
 
-        # Backward-compat for legacy flags
+        # Backward-compat for legacy flags with deprecation warnings
+        import warnings
+
         # Legacy ECD flags map onto the modular magnitude selector.
         if getattr(self, "ablate_ecd", False):
+            warnings.warn(
+                "ablate_ecd is deprecated and will be removed in a future version. "
+                "Use magnitude='none' instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
             self.magnitude = "none"
         elif getattr(self, "use_ecd", False):
+            warnings.warn(
+                "use_ecd is deprecated and will be removed in a future version. "
+                "Use magnitude='ecd_tanh' instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
             self.magnitude = "ecd_tanh"
 
-        # Backward-compat for legacy flags
-        if getattr(self, "use_triton", None) is True and self.rotation_impl == "auto":
-            self.rotation_impl = "triton"
+        # Legacy rotation flags
         if getattr(self, "use_cayley", None) is True:
+            warnings.warn(
+                "use_cayley is deprecated and will be removed in a future version. "
+                "Use rotation_param='cayley' instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
             self.rotation_param = "cayley"
-        if getattr(self, "use_cayley", None) is False:
+        elif getattr(self, "use_cayley", None) is False:
+            warnings.warn(
+                "use_cayley is deprecated and will be removed in a future version. "
+                "Use rotation_param='angle' instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
             self.rotation_param = "angle"
 
     # ---- distributed / DDP ----

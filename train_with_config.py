@@ -70,6 +70,7 @@ def create_training_command(
     use_4bit: bool = False,
     use_nested_quant: bool = False,
     push_to_hub: bool = False,
+    disable_wandb: bool = False,
     eval_steps: int = None,
     eval_strategy: str = "no",
     torch_dtype: str = "auto"
@@ -179,7 +180,13 @@ def create_training_command(
             "--hub_strategy every_save"
         ])
 
-    return " \\\n    ".join(cmd_parts)
+    command = " \\\n    ".join(cmd_parts)
+
+    # 如果禁用wandb，在命令前添加环境变量
+    if disable_wandb:
+        command = f"WANDB_DISABLED=1 {command}"
+
+    return command
 
 
 def main():
@@ -195,6 +202,7 @@ def main():
     parser.add_argument("--use_4bit", action="store_true", help="启用4bit量化")
     parser.add_argument("--use_nested_quant", action="store_true", help="启用嵌套量化")
     parser.add_argument("--push_to_hub", action="store_true", help="推送结果到Hub")
+    parser.add_argument("--disable_wandb", action="store_true", help="禁用wandb日志记录")
     parser.add_argument("--torch_dtype", type=str, default="auto", help="模型精度(auto/float16/bfloat16/float32)")
     parser.add_argument("--execute", action="store_true", help="直接执行命令")
 
@@ -213,7 +221,8 @@ def main():
         max_length=args.max_length,
         use_4bit=args.use_4bit,
         use_nested_quant=args.use_nested_quant,
-        push_to_hub=args.push_to_hub
+        push_to_hub=args.push_to_hub,
+        disable_wandb=args.disable_wandb
     )
 
     print("=== 生成的训练命令 ===")

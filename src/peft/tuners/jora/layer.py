@@ -44,7 +44,7 @@ class _JoraAdapterState(nn.Module):
         if cfg.S_L == 0:
             self.theta_L = None
         else:
-            init_std = float(getattr(cfg, "theta_init_std", 0.002))
+            init_std = float(cfg.theta_init_std)
             if not getattr(cfg, "force_random_rotation_init", True):
                 init_std = min(init_std, 0.001)
             self.theta_L = nn.Parameter(init_std * torch.randn(cfg.S_L, device=dev, dtype=dt))
@@ -52,7 +52,7 @@ class _JoraAdapterState(nn.Module):
         if cfg.S_R == 0:
             self.theta_R = None
         else:
-            init_std = float(getattr(cfg, "theta_init_std", 0.002))
+            init_std = float(cfg.theta_init_std)
             if not getattr(cfg, "force_random_rotation_init", True):
                 init_std = min(init_std, 0.001)
             self.theta_R = nn.Parameter(init_std * torch.randn(cfg.S_R, device=dev, dtype=dt))
@@ -245,7 +245,8 @@ class _JoraAdapterState(nn.Module):
             return
 
         energy = maybe_gumbel(energy_src, self.cfg.use_gumbel, self.cfg.gumbel_tau)
-        new_pairs = select_top_k_pairs_gpu(energy, k=allowed_count, max_features=int(feature_dim))
+        pairing_strategy = getattr(self.cfg, "pairing_strategy", "consecutive")
+        new_pairs = select_top_k_pairs_gpu(energy, k=allowed_count, max_features=int(feature_dim), pairing_strategy=pairing_strategy)
         self._write_pairs(target_buffer, target_counter, new_pairs, side)
 
         # Update cache after writing pairs
@@ -262,21 +263,42 @@ class _JoraAdapterState(nn.Module):
         if self.cfg.selection == "none":
             return
 
-        S_allow_L = compute_allowed_pairs(self.cfg.S_L, current_step, self.cfg.warmup_steps, self.cfg.warmup_ratio, total_steps)
-        S_allow_R = compute_allowed_pairs(self.cfg.S_R, current_step, self.cfg.warmup_steps, self.cfg.warmup_ratio, total_steps)
-
-        S_allow_L = min(int(S_allow_L), int(self.pairs_L.size(0)))
-        S_allow_R = min(int(S_allow_R), int(self.pairs_R.size(0)))
+        # Compute warmup ratio for k parameter
+        k_allow = compute_allowed_pairs(self.cfg.k, current_step, self.cfg.warmup_steps, self.cfg.warmup_ratio, total_steps)
+        k_allow = min(int(k_allow), int(self.cfg.k))  # Ensure k_allow <= k
 
         if self.cfg.selection == "random":
-            self.init_random_pairs(n_pairs_L=S_allow_L, n_pairs_R=S_allow_R)
+            # For random selection, distribute k pairs between left and right sides
+            # Use equal split, or could be made configurable
+            k_per_side = k_allow // 2
+            k_L = min(k_per_side, int(self.pairs_L.size(0)))
+            k_R = min(k_per_side, int(self.pairs_R.size(0)))
+            # If odd number, give extra to left side
+            if k_allow % 2 == 1 and k_L < k_per_side * 2:
+                k_L = min(k_L + 1, int(self.pairs_L.size(0)))
+            self.init_random_pairs(n_pairs_L=k_L, n_pairs_R=k_R)
             return
 
         # default: topk_ema
-        if self.cfg.S_L > 0:
-            self._update_pair_buffer(self.pairs_L, self.num_pairs_L, self.grad_row_ema, S_allow_L, self.n, 'left')
-        if self.cfg.S_R > 0:
-            self._update_pair_buffer(self.pairs_R, self.num_pairs_R, self.grad_col_ema, S_allow_R, self.m, 'right')
+        # Distribute k pairs between left and right sides based on available capacity
+        total_capacity = int(self.pairs_L.size(0)) + int(self.pairs_R.size(0))
+        if total_capacity > 0:
+            # Proportional allocation based on buffer sizes
+            k_L = min(int(k_allow * self.pairs_L.size(0) // total_capacity), int(self.pairs_L.size(0)))
+            k_R = min(k_allow - k_L, int(self.pairs_R.size(0)))
+            # Ensure at least some pairs if k_allow > 0
+            if k_allow > 0 and k_L == 0 and self.pairs_L.size(0) > 0:
+                k_L = 1
+            if k_allow > 0 and k_R == 0 and self.pairs_R.size(0) > 0:
+                k_R = 1
+        else:
+            k_L = 0
+            k_R = 0
+
+        if self.cfg.S_L > 0 and k_L > 0:
+            self._update_pair_buffer(self.pairs_L, self.num_pairs_L, self.grad_row_ema, k_L, self.n, 'left')
+        if self.cfg.S_R > 0 and k_R > 0:
+            self._update_pair_buffer(self.pairs_R, self.num_pairs_R, self.grad_col_ema, k_R, self.m, 'right')
 
     def _apply_side_rotation(self, x: Tensor, is_left_side: bool) -> Tensor:
         """Apply one side of the implicit rotation with all safety guards.
@@ -436,6 +458,16 @@ class JoraLayer(nn.Module, BaseTunerLayer):
                 return
             if not grad_output or grad_output[0] is None:
                 return
+
+            # Gradient EMA update with frequency control (independent of activation EMA)
+            if not hasattr(self, '_grad_ema_step_counter'):
+                self._grad_ema_step_counter = 0
+            self._grad_ema_step_counter += 1
+
+            grad_interval = int(getattr(st.cfg, "ema_grad_interval", 1))
+            if grad_interval > 1 and (self._grad_ema_step_counter % grad_interval) != 0:
+                return
+
             g = grad_output[0].detach()
             if torch.isnan(g).any() or torch.isinf(g).any():
                 return

@@ -68,11 +68,19 @@ Configuration class for JORA hyperparameters.
 - `rotation_impl: RotationImpl` - Rotation implementation: "auto", "triton", or "torch" (default: "auto")
 
 **JORA Selection Parameters:**
-- `k: int` - Number of selected parameter pairs (default: 8)
+- `k: int` - Maximum number of pairs to select across both left and right rotations (default: 8)
 - `selection: SelectionType` - Selection method: "topk_ema", "random", or "none" (default: "topk_ema")
+- `pairing_strategy: PairingStrategy` - Pairing strategy for pair selection: "consecutive" or "high_low" (default: "consecutive")
 - `ema_beta: float` - EMA decay factor for selection (default: 0.98)
 - `warmup_steps: int` - Warmup steps for selection (default: 0)
 - `warmup_ratio: float` - Warmup ratio relative to total steps (default: 0.0)
+- `ema_update_interval: int` - Update activation EMA statistics every N forward steps (default: 1)
+- `ema_grad_interval: int` - Update gradient EMA statistics every N backward steps (default: 1)
+
+**Pairing Strategies:**
+
+- `consecutive`: Pairs high-energy dimensions with other high-energy dimensions (default). This maximizes energy concentration but may limit redistribution.
+- `high_low`: Pairs high-energy dimensions with low-energy dimensions. This enables energy redistribution between high and low expression dimensions, potentially helping underrepresented features gain gradients.
 
 **JORA Core Parameters:**
 - `core: CoreType` - Core adaptation type: "diag", "block", or "lowrank" (default: "diag")
@@ -271,8 +279,8 @@ Apply sequence of 2D rotations to tensor.
 
 ### selection.py
 
-##### `select_top_k_pairs_gpu(energy: Tensor, k: int, max_features: Optional[int] = None) -> Tensor`
-Select top-k parameter pairs based on energy scores.
+##### `select_top_k_pairs_gpu(energy: Tensor, k: int, max_features: Optional[int] = None, pairing_strategy: str = "consecutive") -> Tensor`
+Select top-k parameter pairs based on energy scores using specified pairing strategy.
 
 ### magnitude.py
 
