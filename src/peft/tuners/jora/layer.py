@@ -114,6 +114,8 @@ class _JoraAdapterState(nn.Module):
 
                 total_energy = (base_row_norms.float() ** 2).sum()
             self.register_buffer("base_row_norms", base_row_norms, persistent=True)
+            # Cache fp32 version to avoid repeated .float() calls during magnitude computation
+            self.register_buffer("base_row_norms_fp32", base_row_norms.float(), persistent=False)
             self.register_buffer("total_energy", total_energy, persistent=True)
             # Parameter is interpreted as either tanh-gate (ecd_tanh) or softmax logits (oer_softmax)
             self.ecd_log_mag = nn.Parameter(torch.zeros(self.n, device=dev, dtype=dt))
@@ -369,7 +371,7 @@ class _JoraAdapterState(nn.Module):
 
         if mag == "ecd_tanh":
             scale = compute_ecd_scale(
-                base_row_norms=self.base_row_norms,
+                base_row_norms=self.base_row_norms_fp32,  # Use cached fp32 version for performance
                 total_energy=self.total_energy,
                 ecd_log_mag=self.ecd_log_mag,
                 ecd_alpha=self.cfg.ecd_alpha,
@@ -378,7 +380,7 @@ class _JoraAdapterState(nn.Module):
             ).to(out.dtype)
         elif mag == "oer_softmax":
             scale = compute_oer_scale_softmax(
-                base_row_norms=self.base_row_norms,
+                base_row_norms=self.base_row_norms_fp32,  # Use cached fp32 version for performance
                 total_energy=self.total_energy,
                 oer_logits=self.ecd_log_mag,
                 temperature=self.cfg.oer_temperature,
@@ -473,7 +475,7 @@ class JoraLayer(nn.Module, BaseTunerLayer):
                 return
             g_sq = g.reshape(-1, st.n).float().pow(2).mean(dim=0)
             beta = float(st.cfg.ema_beta)
-            st.grad_row_ema.mul_(beta).add_(g_sq, alpha=1.0 - beta)
+            st.grad_row_ema.lerp_(g_sq, 1.0 - beta)  # Fused EMA update for better performance
         except Exception:
             return
 
@@ -494,7 +496,7 @@ class JoraLayer(nn.Module, BaseTunerLayer):
                     if not torch.isnan(xd).any() and not torch.isinf(xd).any():
                         x_sq = xd.reshape(-1, st.m).float().pow(2).mean(dim=0)
                         beta = float(st.cfg.ema_beta)
-                        st.grad_col_ema.mul_(beta).add_(x_sq, alpha=1.0 - beta)
+                        st.grad_col_ema.lerp_(x_sq, 1.0 - beta)  # Fused EMA update for better performance
 
         # Ensure input dtype matches weight dtype for proper computation
         if x.dtype != self.base_layer.weight.dtype:

@@ -188,12 +188,6 @@ class JoraModel(BaseTuner):
         # Use first layer as representative for selection computation
         representative_layer = group[0]
 
-        # Temporarily store original selection results
-        original_pairs_L = representative_layer.adapters['default'].pairs_L.clone()
-        original_pairs_R = representative_layer.adapters['default'].pairs_R.clone()
-        original_num_pairs_L = representative_layer.adapters['default'].num_pairs_L.clone()
-        original_num_pairs_R = representative_layer.adapters['default'].num_pairs_R.clone()
-
         # Compute selection for representative layer
         representative_layer.update_step(current_step=current_step, total_steps=total_steps)
 

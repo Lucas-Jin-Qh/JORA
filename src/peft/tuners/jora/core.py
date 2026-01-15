@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -19,6 +21,13 @@ class DiagCore(nn.Module):
             self.diag_params = nn.Parameter(0.01 * torch.randn(d_size, device=device, dtype=dtype))
 
     def forward(self) -> Tensor:
+        warnings.warn(
+            "DiagCore.forward() generates a full dense matrix which consumes significant memory "
+            "(e.g., 64MB for 4096x4096). This method is deprecated and should be avoided. "
+            "Use apply_to_vector() or get_row_slice() for memory-efficient operations instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         D = torch.zeros(self.n, self.m, device=self.diag_params.device, dtype=self.diag_params.dtype)
         d_len = self.diag_params.size(0)
         D[:d_len, :d_len] = torch.diag(self.diag_params)
@@ -76,6 +85,13 @@ class BlockCore(nn.Module):
             self.register_parameter("diag_remainder", None)
 
     def forward(self) -> Tensor:
+        warnings.warn(
+            "BlockCore.forward() generates a full dense matrix which consumes significant memory. "
+            "This method is deprecated and should be avoided. "
+            "Use apply_to_vector() or get_row_slice() for memory-efficient operations instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         D = torch.zeros(self.n, self.m, device=self.blocks.device if self.blocks is not None else self.diag_remainder.device,
                         dtype=self.blocks.dtype if self.blocks is not None else self.diag_remainder.dtype)
         if self.blocks is not None:
@@ -131,27 +147,46 @@ class BlockCore(nn.Module):
 
     def apply_to_vector(self, x: Tensor) -> Tensor:
         # y = x @ D^T (block-diagonal => block-wise matmul)
-        parts = []
-        # blocks
+        # Vectorized implementation for better GPU utilization
+
+        # Handle block-diagonal part with vectorized operations
         if self.blocks is not None:
-            for b in range(self.n_blocks):
-                start = b * self.block_size
-                end = start + self.block_size
-                xb = x[..., start:end]  # [..., bs]
-                # D block is [bs,bs], we need D^T
-                yb = torch.matmul(xb, self.blocks[b].t())
-                parts.append(yb)
-        # remainder diag
+            # Stack all blocks and transpose them: [n_blocks, bs, bs] -> [n_blocks, bs, bs]
+            blocks_t = torch.stack([b.t() for b in self.blocks], dim=0)  # [n_blocks, bs, bs]
+
+            # Reshape input for vectorized computation
+            block_region_end = self.n_blocks * self.block_size
+            x_blocks = x[..., :block_region_end]  # [..., n_blocks * bs]
+
+            # Reshape to [..., n_blocks, bs] for batched matrix multiplication
+            x_blocks_reshaped = x_blocks.view(*x.shape[:-1], self.n_blocks, self.block_size)
+
+            # Vectorized block-wise matrix multiplication: [..., n_blocks, bs] @ [n_blocks, bs, bs]
+            # Result: [..., n_blocks, bs] -> flatten back to [..., n_blocks * bs]
+            y_blocks = torch.einsum('...nbk,bkj->...nbj', x_blocks_reshaped, blocks_t)
+            y_blocks = y_blocks.reshape(*x.shape[:-1], -1)  # [..., n_blocks * bs]
+        else:
+            y_blocks = x.new_zeros((*x.shape[:-1], 0))
+            block_region_end = 0
+
+        # Handle remainder diagonal part
         if self.diag_remainder is not None:
-            start = self.n_blocks * self.block_size
+            start = block_region_end
             end = start + self.remainder_size
-            xr = x[..., start:end]
-            yr = xr * self.diag_remainder
-            parts.append(yr)
-        y = torch.cat(parts, dim=-1) if parts else x.new_zeros((*x.shape[:-1], self.n))
+            xr = x[..., start:end]  # [..., remainder_size]
+            yr = xr * self.diag_remainder  # Element-wise multiplication
+            y_remainder = yr
+        else:
+            y_remainder = x.new_zeros((*x.shape[:-1], 0))
+
+        # Concatenate block and remainder parts
+        y = torch.cat([y_blocks, y_remainder], dim=-1)
+
+        # Pad if necessary (should not happen with correct initialization)
         if y.shape[-1] < self.n:
             pad = x.new_zeros((*x.shape[:-1], self.n - y.shape[-1]))
             y = torch.cat([y, pad], dim=-1)
+
         return y
 
 class LowRankCore(nn.Module):

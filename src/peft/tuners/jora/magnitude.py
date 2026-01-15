@@ -23,7 +23,7 @@ def compute_ecd_scale(
     This is **NOT** the softmax-competitive OER described in the paper.
     We keep it only for backward compatibility / ablations.
     """
-    base_norms = base_row_norms.float()
+    base_norms = base_row_norms  # Assume fp32 input for performance
     z = ecd_log_mag.float() / max(float(temperature), eps)
     alpha = float(ecd_alpha)
 
@@ -53,7 +53,7 @@ def compute_oer_scale_softmax(
     and explicit energy conservation: sum(m_i^2) == E_total (guaranteed by renormalization).
     """
     # 输入验证和类型转换
-    base_norms = base_row_norms.float()
+    base_norms = base_row_norms  # Assume fp32 input for performance
     # 安全地将total_energy转换为标量
     if total_energy.numel() == 1:
         total_energy_val = float(total_energy.float().item())
