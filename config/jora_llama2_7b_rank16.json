@@ -55,5 +55,6 @@
   "ecd_temp_end": 1.0,
   "magnitude_init_scale": 1.0,
   "magnitude_lr_scale": 1.0,
-  "chunk_size": 512
+  "chunk_size": 512,
+  "ddp_allow_unused_parameters": true
 }

@@ -17,6 +17,46 @@ def load_peft_config(config_path: str) -> dict:
     return config
 
 
+def estimate_parameters(config: dict, model_name: str = "Llama-2-7b") -> dict:
+    """估算PEFT参数量"""
+    peft_type = config.get('peft_type', 'LORA')
+
+    # Llama-2-7b 基础参数量 (实际约67亿)
+    base_params = 6_740_000_000
+
+    if peft_type == "JORA":
+        # JORA 参数估算：旋转矩阵 + 核心适配矩阵 + 选择参数
+        s_l = config.get('S_L', 16)
+        s_r = config.get('S_R', 16)
+        k = config.get('k', 4)
+        n_modules = len(config.get('target_modules', []))
+
+        # 旋转参数：theta_L 和 theta_R
+        rotation_params = (s_l + s_r) * n_modules
+
+        # 核心参数：对角矩阵 (简化为主要模块的输出维度)
+        # 主要模块：q_proj, k_proj, v_proj, o_proj (4096维度)
+        core_params = 4 * 4096 * n_modules  # 简化为主要attention模块
+
+        # 幅度参数：log_mag per output dimension
+        magnitude_params = 4096 * n_modules  # 简化为主要attention模块
+
+        trainable_params = rotation_params + core_params + magnitude_params
+
+    elif peft_type == "LORA":
+        # LoRA 参数估算
+        r = config.get('r', 64)
+        n_modules = len(config.get('target_modules', []))
+        # 典型的 LoRA: 2 * r * (in_dim + out_dim) per module
+        trainable_params = 2 * r * 8192 * n_modules  # 简化为 8192 维度估算
+
+    return {
+        'base_params': base_params,
+        'trainable_params': trainable_params,
+        'trainable_ratio': trainable_params / base_params * 100
+    }
+
+
 def create_training_command(
     model_path: str,
     dataset_name: str,
@@ -82,6 +122,11 @@ def create_training_command(
         "--use_reentrant",
         "--dataset_text_field text"
     ])
+
+    # JORA requires special DDP settings
+    if peft_type == "JORA":
+        cmd_parts.append("--ddp_find_unused_parameters True")
+        cmd_parts.append("--ddp_timeout 1800")  # 30 minutes for sparse updates
 
     # 根据PEFT类型添加相应参数
     if peft_type == "JORA":
@@ -194,8 +239,16 @@ def main():
     print(f"Target Modules: {len(config['target_modules'])} 个")
     print(f"PEFT Type: {peft_type}")
 
+    # 添加参数量估算
+    param_info = estimate_parameters(config)
+    print(f"\n=== 参数量估算 ===")
+    print(f"基础模型参数量: {param_info['base_params']:,}")
+    print(f"可训练参数量: ~{param_info['trainable_params']:,}")
+    print(f"可训练参数比例: {param_info['trainable_ratio']:.3f}%")
+
     if args.execute:
         print("\n=== 开始执行训练 ===")
+        print("(注意：实际参数量将在训练开始时显示)")
         os.system(command)
     else:
         print("\n=== 复制以上命令手动执行 ===")

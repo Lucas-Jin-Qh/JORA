@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 
 from peft.tuners.tuners_utils import BaseTuner, check_target_module_exists
+from peft.utils import AuxiliaryTrainingWrapper
 
 from .config import JoraConfig
 from .layer import JoraLayer
@@ -270,13 +271,17 @@ class JoraModel(BaseTuner):
         for _, p in model.named_parameters():
             p.requires_grad = False
 
-        # Enable trainable flags for JORA adapter parameters only
+        # Enable trainable flags for JORA adapter parameters and modules_to_save
         for m in model.modules():
             if isinstance(m, JoraLayer):
                 # Adapter state lives under m.adapters[adapter_name]
                 for adapter_state in m.adapters.values():
                     for param in adapter_state.parameters():
                         param.requires_grad = True
+            elif isinstance(m, AuxiliaryTrainingWrapper):
+                # Enable trainable flags for modules_to_save (e.g., lm_head)
+                for param in m.parameters():
+                    param.requires_grad = True
 
     def disable_adapter_layers(self) -> None:
         for m in self.model.modules():

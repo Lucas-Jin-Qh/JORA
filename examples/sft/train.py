@@ -1,7 +1,11 @@
 import os
 import sys
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
+
+# 过滤无害警告
+warnings.filterwarnings("ignore")
 
 from transformers import HfArgumentParser, set_seed
 from trl import SFTConfig, SFTTrainer
@@ -170,6 +174,13 @@ def main(model_args, data_args, training_args):
         training_args,
         apply_chat_template=model_args.chat_template_format != "none",
     )
+
+    # JORA requires special DDP settings for sparse parameter selection
+    if model_args.use_peft_jora:
+        # Set DDP parameters for JORA's sparse selection mechanism
+        training_args.ddp_find_unused_parameters = True
+        if hasattr(training_args, 'ddp_timeout'):
+            training_args.ddp_timeout = 1800  # 30 minutes timeout for sparse updates
 
     # trainer
     callbacks = []
