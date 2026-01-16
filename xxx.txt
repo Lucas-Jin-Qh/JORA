@@ -1,3 +1,10 @@
 我现在在peft-jora环境中，已经使用命令@bash (1-4) 跑通了训练管线，但现在jora的实现代码@src/peft/tuners/jora 还是有一些问题，该jora是我在peft官方仓库中集成并注册的，你现在先了解当前环境和依赖版本，以及jora代码的具体实现。接下来，我会给你一些我对目前实现代码的几个问题，你需要查证后进行合理的优化。
 
 再次检查上述代码实现，避免因为为了debug而采用了简化实现而导致后期正式实验时出现问题
+
+
+export HF_HUB_DISABLE_TELEMETRY=1
+export HF_ENDPOINT='https://hf-mirror.com'
+export HF_DATASETS_CACHE='/home/jqh/Workshop/JORA/datasets'
+
+CUDA_VISIBLE_DEVICES=1 python train_with_config.py     --model_path "/mnt/sda/jqh/pretrained_checkpoints/Llama-2-7b-hf/"     --dataset_name "yahma/alpaca-cleaned"     --config "config/jora_llama2_7b_rank16.json"     --output_dir "checkpoints/jora_experiment"     --num_epochs 3     --batch_size 2     --learning_rate 0.01     --execute --disable_wandb

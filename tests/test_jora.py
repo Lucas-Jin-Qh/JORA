@@ -30,7 +30,7 @@ class TestJora:
             S_R=8,
             k=4,
             rotation_param="cayley",
-            selection_type="topk_ema",
+            selection="topk_ema",
             magnitude="ecd_tanh",
         )
         assert config.peft_type.value == "JORA"
@@ -146,10 +146,10 @@ class TestJora:
 
     def test_jora_different_selection_types(self):
         """Test JORA with different selection types."""
-        config_topk = JoraConfig(selection_type="topk_ema")
-        config_random = JoraConfig(selection_type="random")
-        config_none = JoraConfig(selection_type="none")
+        config_topk = JoraConfig(selection="topk_ema")
+        config_random = JoraConfig(selection="random")
+        config_none = JoraConfig(selection="none")
 
-        assert config_topk.selection_type == "topk_ema"
-        assert config_random.selection_type == "random"
-        assert config_none.selection_type == "none"
+        assert config_topk.selection == "topk_ema"
+        assert config_random.selection == "random"
+        assert config_none.selection == "none"
