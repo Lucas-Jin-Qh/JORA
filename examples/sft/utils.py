@@ -63,11 +63,46 @@ def create_datasets(tokenizer, data_args, training_args, apply_chat_template=Fal
             batch.append(text)
         return {"text": batch}
 
+    def preprocess_gsm8k(samples):
+        """预处理GSM8K数据集，将question和answer组合成单个文本"""
+        batch = []
+        for question, answer in zip(samples["question"], samples["answer"]):
+            # GSM8K格式：问题后面直接跟着答案
+            text = f"Question: {question}\nAnswer: {answer}"
+            batch.append(text)
+        return {"text": batch}
+
     raw_datasets = DatasetDict()
     for split in data_args.splits.split(","):
         try:
+            # Parse dataset name to support config specification (e.g., "gsm8k:main")
+            dataset_name = data_args.dataset_name
+            config_name = None
+
+            if ":" in dataset_name:
+                dataset_name, config_name = dataset_name.split(":", 1)
+
             # Try first if dataset on a Hub repo
-            dataset = load_dataset(data_args.dataset_name, split=split)
+            if config_name:
+                dataset = load_dataset(dataset_name, config_name, split=split)
+            else:
+                # Try loading without config first, if it fails with ConfigError, try common configs
+                try:
+                    dataset = load_dataset(dataset_name, split=split)
+                except ValueError as e:
+                    if "Config name is missing" in str(e):
+                        # Try common config names for datasets that require them
+                        for config in ['main', 'socratic', 'default']:
+                            try:
+                                dataset = load_dataset(dataset_name, config, split=split)
+                                print(f"Using config '{config}' for dataset '{dataset_name}'")
+                                break
+                            except Exception:
+                                continue
+                        else:
+                            raise e  # Re-raise if no config worked
+                    else:
+                        raise e
         except DatasetGenerationError:
             # If not, check local dataset
             dataset = load_from_disk(os.path.join(data_args.dataset_name, split))
@@ -89,6 +124,13 @@ def create_datasets(tokenizer, data_args, training_args, apply_chat_template=Fal
         # 特殊处理Alpaca数据集
         raw_datasets = raw_datasets.map(
             preprocess_alpaca,
+            batched=True,
+            remove_columns=raw_datasets["train"].column_names,
+        )
+    elif "gsm8k" in data_args.dataset_name.lower():
+        # 特殊处理GSM8K数据集
+        raw_datasets = raw_datasets.map(
+            preprocess_gsm8k,
             batched=True,
             remove_columns=raw_datasets["train"].column_names,
         )
@@ -221,6 +263,7 @@ def create_and_prepare_model(args, data_args, training_args):
             target_modules=args.lora_target_modules.split(",")
             if args.lora_target_modules != "all-linear"
             else args.lora_target_modules,
+            use_dora=args.use_dora,
         )
 
     special_tokens = None

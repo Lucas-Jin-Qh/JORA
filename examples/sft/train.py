@@ -107,6 +107,10 @@ class ModelArguments:
         default=False,
         metadata={"help": "Enables PEFT LoRA for training."},
     )
+    use_dora: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Enables DoRA (Weight-Decomposed Low-Rank Adaptation) for LoRA training."},
+    )
     use_8bit_quantization: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables loading model in 8bit."},

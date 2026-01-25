@@ -43,8 +43,8 @@ def estimate_parameters(config: dict, model_name: str = "Llama-2-7b") -> dict:
 
         trainable_params = rotation_params + core_params + magnitude_params
 
-    elif peft_type == "LORA":
-        # LoRA 参数估算
+    elif peft_type in ["LORA", "DORA"]:
+        # LoRA/DoRA 参数估算
         r = config.get('r', 64)
         n_modules = len(config.get('target_modules', []))
         # 典型的 LoRA: 2 * r * (in_dim + out_dim) per module
@@ -153,7 +153,7 @@ def create_training_command(
         # JORA使用LoRA的目标模块参数名
         if 'target_modules' in peft_config:
             cmd_parts.append(f"--lora_target_modules {','.join(peft_config['target_modules'])}")
-    elif peft_type == "LORA":
+    elif peft_type in ["LORA", "DORA"]:
         cmd_parts.extend([
             "--use_peft_lora",
             f"--lora_r {peft_config['r']}",
@@ -161,6 +161,10 @@ def create_training_command(
             f"--lora_dropout {peft_config['lora_dropout']}",
             f"--lora_target_modules {','.join(peft_config['target_modules'])}"
         ])
+
+        # 如果是DoRA，添加use_dora参数
+        if peft_type == "DORA":
+            cmd_parts.append("--use_dora True")
 
     # cmd_parts.append("--use_flash_attn True")  # 需要额外安装flash_attn包
 
@@ -204,6 +208,7 @@ def main():
     parser.add_argument("--push_to_hub", action="store_true", help="推送结果到Hub")
     parser.add_argument("--disable_wandb", action="store_true", help="禁用wandb日志记录")
     parser.add_argument("--torch_dtype", type=str, default="auto", help="模型精度(auto/float16/bfloat16/float32)")
+    parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--execute", action="store_true", help="直接执行命令")
 
     args = parser.parse_args()
@@ -219,6 +224,7 @@ def main():
         learning_rate=args.learning_rate,
         torch_dtype=args.torch_dtype,
         max_length=args.max_length,
+        seed=args.seed,
         use_4bit=args.use_4bit,
         use_nested_quant=args.use_nested_quant,
         push_to_hub=args.push_to_hub,

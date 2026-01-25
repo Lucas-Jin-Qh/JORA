@@ -1,0 +1,32 @@
+{
+  "peft_type": "LORA",
+  "auto_mapping": null,
+  "base_model_name_or_path": null,
+  "revision": null,
+  "task_type": "CAUSAL_LM",
+  "inference_mode": true,
+  "r": 8,
+  "target_modules": [
+    "q_proj",
+    "v_proj"
+  ],
+  "lora_alpha": 16,
+  "lora_dropout": 0.05,
+  "fan_in_fan_out": false,
+  "bias": "none",
+  "use_rslora": false,
+  "modules_to_save": null,
+  "init_lora_weights": true,
+  "layers_to_transform": null,
+  "layers_pattern": null,
+  "rank_pattern": {},
+  "alpha_pattern": {},
+  "megatron_config": null,
+  "megatron_core": "megatron.core",
+  "loftq_config": null,
+  "use_dora": false,
+  "layer_replication": null,
+  "runtime_config": {
+    "ephemeral_gpu_offload": false
+  }
+}
