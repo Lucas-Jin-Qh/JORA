@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # Hugging Face 相关环境变量配置
 export HF_HUB_DISABLE_TELEMETRY=1
 export HF_ENDPOINT='https://hf-mirror.com'
@@ -8,50 +10,53 @@ export HF_DATASETS_CACHE='/home/jqh/Workshop/JORA/datasets'
 # GPU 配置 - 使用 GPU1
 export CUDA_VISIBLE_DEVICES=1
 
-# 定义参数数组 - GPU1负责所有rank
-ranks=(8 16)
+# 定义参数数组（完整流水线：4/8/16/32）
+ranks=(4 8 16 32)
 seeds=(42 1337 2026)
 model_path="/mnt/sda/jqh/pretrained_checkpoints/Mistral-7B-v0.1/"
 dataset_name="yahma/alpaca-cleaned"
 learning_rate=0.0002
 
-echo "=== Mistral-7B + alpaca-cleaned (GPU1: rank 8, 16) DoRA ==="
 
-# 循环执行剩余实验（从 rank8_seed2026 开始）
+
+# 循环执行全部实验（按模型划分：Mistral -> GPU1）
 for rank in "${ranks[@]}"; do
-    echo "Training Mistral-7B + alpaca-cleaned + rank ${rank} (DoRA)..."
+    echo "Training Mistral-7B + alpaca-cleaned + rank ${rank} (OFT)..."
     echo "========================================"
 
     for seed in "${seeds[@]}"; do
-        # 跳过已完成的实验：rank8 的 seed42 和 seed1337
-        if [[ $rank -eq 8 && ($seed -eq 42 || $seed -eq 1337) ]]; then
-            echo "跳过已完成的实验: rank=${rank}, seed=${seed}"
+        output_dir="checkpoints/oft/oft_mistral_7b_alpaca_rank${rank}_seed${seed}"
+
+        # 如果输出目录已包含主要权重文件，则跳过（支持断点续跑）
+        if [ -f "${output_dir}/adapter_model.safetensors" ] || [ -f "${output_dir}/adapter_config.json" ]; then
+            echo "已存在输出，跳过: ${output_dir}"
             continue
         fi
 
-        echo "正在运行 rank=${rank}, seed=${seed} 的实验..."
+        echo "正在运行 rank=${rank}, seed=${seed} 的实验 -> 输出：${output_dir}"
+        mkdir -p "${output_dir}"
 
         python train_with_config.py \
             --model_path "${model_path}" \
             --dataset_name "${dataset_name}" \
-            --config "config/dora/dora_mistral_7b_alpaca_rank${rank}.json" \
-            --output_dir "checkpoints/dora_mistral_7b_alpaca_rank${rank}_seed${seed}" \
+            --config "config/oft/oft_mistral_7b_alpaca_rank${rank}.json" \
+            --output_dir "${output_dir}" \
             --num_epochs 3 \
-            --batch_size 2 \
+            --batch_size 1 \
             --learning_rate ${learning_rate} \
             --execute --seed ${seed}
-        
+
         if [ $? -ne 0 ]; then
             echo "实验 rank=${rank}, seed=${seed} 失败，停止执行"
             exit 1
         fi
-        
+
         echo "实验 rank=${rank}, seed=${seed} 完成"
         echo "----------------------------------------"
     done
-    
+
     echo "所有 rank=${rank} 的实验完成"
     echo "========================================"
 done
 
-echo "GPU1所有实验(rank 8, 16)成功完成！"
+echo "GPU1 所有 Mistral 实验成功完成！"

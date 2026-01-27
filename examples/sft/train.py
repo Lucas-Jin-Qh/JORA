@@ -107,6 +107,10 @@ class ModelArguments:
         default=False,
         metadata={"help": "Enables PEFT LoRA for training."},
     )
+    use_peft_oft: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Enables PEFT OFT for training."},
+    )
     use_dora: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables DoRA (Weight-Decomposed Low-Rank Adaptation) for LoRA training."},
@@ -127,6 +131,25 @@ class ModelArguments:
         default=False,
         metadata={"help": "Enables UnSloth for training."},
     )
+    # OFT specific args
+    oft_r: Optional[int] = field(default=0, metadata={"help": "OFT rank, number of OFT blocks per injected layer."})
+    oft_block_size: Optional[int] = field(default=32, metadata={"help": "OFT block size across different layers."})
+    oft_module_dropout: Optional[float] = field(default=0.0, metadata={"help": "OFT multiplicative dropout."})
+    oft_target_modules: Optional[str] = field(
+        default="q_proj,k_proj,v_proj,o_proj,down_proj,up_proj,gate_proj",
+        metadata={"help": "comma separated list of target modules to apply OFT layers to"},
+    )
+    oft_fan_in_fan_out: Optional[bool] = field(default=False, metadata={"help": "Set to True if layer stores weight like (fan_in, fan_out)."})
+    oft_bias: Optional[str] = field(default="none", metadata={"help": "Bias type for OFT: none|all|oft_only"})
+    oft_init_weights: Optional[bool] = field(default=True, metadata={"help": "Whether to initialize OFT weights."})
+    oft_layers_to_transform: Optional[str] = field(default=None, metadata={"help": "Comma separated layer indices to transform."})
+    oft_layers_pattern: Optional[str] = field(default=None, metadata={"help": "Layer pattern name if using layers_to_transform."})
+    oft_modules_to_save: Optional[str] = field(default=None, metadata={"help": "Comma separated modules to save apart from OFT layers."})
+    oft_coft: Optional[bool] = field(default=False, metadata={"help": "Whether to use constrained OFT (COFT)."})
+    oft_eps: Optional[float] = field(default=6e-5, metadata={"help": "COFT control strength."})
+    oft_block_share: Optional[bool] = field(default=False, metadata={"help": "Whether to share OFT parameters between blocks."})
+    oft_use_cayley_neumann: Optional[bool] = field(default=True, metadata={"help": "Use Cayley-Neumann formulation."})
+    oft_num_cayley_neumann_terms: Optional[int] = field(default=5, metadata={"help": "Number of Cayley-Neumann terms."})
     torch_dtype: Optional[str] = field(
         default="auto",
         metadata={"help": "Model dtype: auto, float16, bfloat16, float32"},

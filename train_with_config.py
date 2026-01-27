@@ -23,6 +23,8 @@ def estimate_parameters(config: dict, model_name: str = "Llama-2-7b") -> dict:
 
     # Llama-2-7b 基础参数量 (实际约67亿)
     base_params = 6_740_000_000
+    # 默认可训练参数为0，防止未赋值导致错误
+    trainable_params = 0
 
     if peft_type == "JORA":
         # JORA 参数估算：旋转矩阵 + 核心适配矩阵 + 选择参数
@@ -50,6 +52,21 @@ def estimate_parameters(config: dict, model_name: str = "Llama-2-7b") -> dict:
         # 典型的 LoRA: 2 * r * (in_dim + out_dim) per module
         trainable_params = 2 * r * 8192 * n_modules  # 简化为 8192 维度估算
 
+    elif peft_type == "OFT":
+        # OFT 参数估算（粗略）
+        r = config.get('r', 0)
+        oft_block_size = config.get('oft_block_size', 0)
+        n_modules = len(config.get('target_modules', []))
+        # 如果同时设置 r 和 block_size，使用两者相乘；否则按 r * 4096 估算单模块参数量
+        if r and oft_block_size:
+            trainable_params = r * oft_block_size * n_modules
+        elif r:
+            trainable_params = r * 4096 * n_modules
+        elif oft_block_size:
+            trainable_params = oft_block_size * 4096 * n_modules
+        else:
+            trainable_params = 0
+
     return {
         'base_params': base_params,
         'trainable_params': trainable_params,
@@ -63,7 +80,7 @@ def create_training_command(
     peft_config_path: str,
     output_dir: str,
     num_epochs: int = 1,
-    batch_size: int = 4,
+    batch_size: int = 1,
     learning_rate: float = 0.01,
     max_length: int = 2048,
     seed: int = 42,
@@ -118,7 +135,7 @@ def create_training_command(
         "--max_grad_norm 1.0",
         f"--output_dir {output_dir}",
         f"--per_device_train_batch_size {batch_size}",
-        "--gradient_accumulation_steps 4",
+        "--gradient_accumulation_steps 8",
         "--gradient_checkpointing",
         "--use_reentrant",
         "--dataset_text_field text"
@@ -165,6 +182,50 @@ def create_training_command(
         # 如果是DoRA，添加use_dora参数
         if peft_type == "DORA":
             cmd_parts.append("--use_dora True")
+
+    elif peft_type == "OFT":
+        cmd_parts.append("--use_peft_oft")
+        # 基本 OFT 参数
+        cmd_parts.append(f"--oft_r {peft_config.get('r', 0)}")
+        cmd_parts.append(f"--oft_block_size {peft_config.get('oft_block_size', 32)}")
+        cmd_parts.append(f"--oft_module_dropout {peft_config.get('module_dropout', 0.0)}")
+        cmd_parts.append(f"--oft_fan_in_fan_out {str(peft_config.get('fan_in_fan_out', False)).lower()}")
+        cmd_parts.append(f"--oft_bias {peft_config.get('bias', 'none')}")
+        cmd_parts.append(f"--oft_init_weights {str(peft_config.get('init_weights', True)).lower()}")
+
+        # 目标模块
+        if 'target_modules' in peft_config and peft_config['target_modules'] is not None:
+            if isinstance(peft_config['target_modules'], list):
+                cmd_parts.append(f"--oft_target_modules {','.join(peft_config['target_modules'])}")
+            else:
+                cmd_parts.append(f"--oft_target_modules {peft_config['target_modules']}")
+
+        # layers_to_transform / layers_pattern
+        if 'layers_to_transform' in peft_config and peft_config['layers_to_transform'] is not None:
+            if isinstance(peft_config['layers_to_transform'], list):
+                cmd_parts.append(f"--oft_layers_to_transform {','.join(map(str, peft_config['layers_to_transform']))}")
+            else:
+                cmd_parts.append(f"--oft_layers_to_transform {peft_config['layers_to_transform']}")
+        if 'layers_pattern' in peft_config and peft_config['layers_pattern'] is not None:
+            if isinstance(peft_config['layers_pattern'], list):
+                cmd_parts.append(f"--oft_layers_pattern {','.join(peft_config['layers_pattern'])}")
+            else:
+                cmd_parts.append(f"--oft_layers_pattern {peft_config['layers_pattern']}")
+
+        # 其他高级选项
+        cmd_parts.append(f"--oft_coft {str(peft_config.get('coft', False)).lower()}")
+        if 'eps' in peft_config:
+            cmd_parts.append(f"--oft_eps {peft_config.get('eps')}")
+        cmd_parts.append(f"--oft_block_share {str(peft_config.get('block_share', False)).lower()}")
+        cmd_parts.append(f"--oft_use_cayley_neumann {str(peft_config.get('use_cayley_neumann', True)).lower()}")
+        if 'num_cayley_neumann_terms' in peft_config:
+            cmd_parts.append(f"--oft_num_cayley_neumann_terms {peft_config.get('num_cayley_neumann_terms')}")
+        if 'modules_to_save' in peft_config and peft_config['modules_to_save'] is not None:
+            cmd_parts.append(f"--oft_modules_to_save {','.join(peft_config['modules_to_save'])}")
+
+        # 量化/后端相关（保留开关）
+        if peft_config.get('use_4bit', False):
+            cmd_parts.append("--use_4bit_quantization")
 
     # cmd_parts.append("--use_flash_attn True")  # 需要额外安装flash_attn包
 

@@ -12,7 +12,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
-from peft import LoraConfig, JoraConfig
+from peft import LoraConfig, JoraConfig, OFTConfig
 
 
 DEFAULT_CHATML_CHAT_TEMPLATE = "{% for message in messages %}\n{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% if loop.last and add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}{% endfor %}"
@@ -264,6 +264,43 @@ def create_and_prepare_model(args, data_args, training_args):
             if args.lora_target_modules != "all-linear"
             else args.lora_target_modules,
             use_dora=args.use_dora,
+        )
+    elif args.use_peft_oft and not args.use_unsloth:
+        # build OFTConfig from model args
+        target_modules = (
+            args.oft_target_modules.split(",")
+            if args.oft_target_modules and args.oft_target_modules != "all-linear"
+            else args.oft_target_modules
+        )
+        layers_to_transform = None
+        if args.oft_layers_to_transform:
+            # parse comma separated ints
+            try:
+                layers_to_transform = [int(x) for x in args.oft_layers_to_transform.split(",")]
+            except Exception:
+                layers_to_transform = args.oft_layers_to_transform
+
+        modules_to_save = None
+        if args.oft_modules_to_save:
+            modules_to_save = args.oft_modules_to_save.split(",")
+
+        peft_config = OFTConfig(
+            target_modules=target_modules,
+            r=args.oft_r,
+            oft_block_size=args.oft_block_size,
+            module_dropout=args.oft_module_dropout,
+            fan_in_fan_out=args.oft_fan_in_fan_out,
+            bias=args.oft_bias,
+            init_weights=args.oft_init_weights,
+            layers_to_transform=layers_to_transform,
+            layers_pattern=args.oft_layers_pattern,
+            modules_to_save=modules_to_save,
+            coft=args.oft_coft,
+            eps=args.oft_eps,
+            block_share=args.oft_block_share,
+            use_cayley_neumann=args.oft_use_cayley_neumann,
+            num_cayley_neumann_terms=args.oft_num_cayley_neumann_terms,
+            inference_mode=False,
         )
 
     special_tokens = None
