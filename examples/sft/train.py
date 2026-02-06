@@ -150,6 +150,41 @@ class ModelArguments:
     oft_block_share: Optional[bool] = field(default=False, metadata={"help": "Whether to share OFT parameters between blocks."})
     oft_use_cayley_neumann: Optional[bool] = field(default=True, metadata={"help": "Use Cayley-Neumann formulation."})
     oft_num_cayley_neumann_terms: Optional[int] = field(default=5, metadata={"help": "Number of Cayley-Neumann terms."})
+    # BOFT specific args
+    use_peft_boft: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Enables PEFT BOFT (Butterfly OFT) for training."},
+    )
+    boft_block_size: Optional[int] = field(default=4, metadata={"help": "BOFT block size across different layers."})
+    boft_block_num: Optional[int] = field(default=0, metadata={"help": "Number of BOFT blocks per injected layer."})
+    boft_n_butterfly_factor: Optional[int] = field(default=1, metadata={"help": "Number of butterfly factors."})
+    boft_target_modules: Optional[str] = field(
+        default="q_proj,k_proj,v_proj,o_proj,down_proj,up_proj,gate_proj",
+        metadata={"help": "comma separated list of target modules to apply BOFT layers to"},
+    )
+    boft_fan_in_fan_out: Optional[bool] = field(default=False, metadata={"help": "Set to True if layer stores weight like (fan_in, fan_out)."})
+    boft_bias: Optional[str] = field(default="none", metadata={"help": "Bias type for BOFT: none|all|boft_only"})
+    boft_init_weights: Optional[bool] = field(default=True, metadata={"help": "Whether to initialize BOFT weights."})
+    boft_dropout: Optional[float] = field(default=0.0, metadata={"help": "BOFT multiplicative dropout."})
+    boft_layers_to_transform: Optional[str] = field(default=None, metadata={"help": "Comma separated layer indices to transform."})
+    boft_layers_pattern: Optional[str] = field(default=None, metadata={"help": "Layer pattern name if using layers_to_transform."})
+    boft_modules_to_save: Optional[str] = field(default=None, metadata={"help": "Comma separated modules to save apart from BOFT layers."})
+    # IA3 specific args
+    use_peft_ia3: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Enables PEFT IA3 for training."},
+    )
+    ia3_target_modules: Optional[str] = field(
+        default="q_proj,k_proj,v_proj,o_proj,down_proj,up_proj,gate_proj",
+        metadata={"help": "comma separated list of target modules to apply IA3 layers to"},
+    )
+    ia3_feedforward_modules: Optional[str] = field(
+        default=None,
+        metadata={"help": "comma separated list of modules to be treated as feedforward modules"},
+    )
+    ia3_fan_in_fan_out: Optional[bool] = field(default=False, metadata={"help": "Set to True if layer stores weight like (fan_in, fan_out)."})
+    ia3_modules_to_save: Optional[str] = field(default=None, metadata={"help": "Comma separated modules to save apart from IA3 layers."})
+    ia3_init_weights: Optional[bool] = field(default=True, metadata={"help": "Whether to initialize the vectors in the IA3 layers."})
     torch_dtype: Optional[str] = field(
         default="auto",
         metadata={"help": "Model dtype: auto, float16, bfloat16, float32"},

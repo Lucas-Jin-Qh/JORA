@@ -1,0 +1,70 @@
+{
+  "name": "Phase 3: Selection Mechanism Refinement",
+  "description": "在最优 S/k 基础上优化 Selection 参数",
+  "phase": 3,
+  "priority": "P1 - 高优先级",
+  "experiments": [
+    {
+      "name": "sel-topk_ema-b0.90-u1",
+      "selection": "topk_ema",
+      "ema_beta": 0.90,
+      "update_interval": 1,
+      "notes": "激进 EMA，快速响应"
+    },
+    {
+      "name": "sel-topk_ema-b0.90-u50",
+      "selection": "topk_ema",
+      "ema_beta": 0.90,
+      "update_interval": 50,
+      "notes": "激进 EMA，稀疏更新"
+    },
+    {
+      "name": "sel-topk_ema-b0.95-u16",
+      "selection": "topk_ema",
+      "ema_beta": 0.95,
+      "update_interval": 16,
+      "notes": "中等 EMA，平衡更新频率"
+    },
+    {
+      "name": "sel-topk_ema-b0.95-u50",
+      "selection": "topk_ema",
+      "ema_beta": 0.95,
+      "update_interval": 50,
+      "notes": "中等 EMA，默认推荐"
+    },
+    {
+      "name": "sel-topk_ema-b0.98-u50",
+      "selection": "topk_ema",
+      "ema_beta": 0.98,
+      "update_interval": 50,
+      "notes": "保守 EMA，稳定更新"
+    },
+    {
+      "name": "sel-random",
+      "selection": "random",
+      "notes": "随机选择基线，验证 topk 有效性"
+    },
+    {
+      "name": "sel-none",
+      "selection": "none",
+      "notes": "无选择基线，静态更新"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "验证 topk_ema 机制的有效性，找到最佳的 EMA beta 和更新间隔"
+}
+

@@ -1,0 +1,26 @@
+{
+  "peft_type": "BOFT",
+  "auto_mapping": null,
+  "base_model_name_or_path": null,
+  "revision": null,
+  "task_type": "CAUSAL_LM",
+  "inference_mode": false,
+  "boft_n_butterfly_factor": 1,
+  "boft_dropout": 0.0,
+  "target_modules": [
+    "q_proj",
+    "v_proj"
+  ],
+  "fan_in_fan_out": false,
+  "bias": "none",
+  "modules_to_save": null,
+  "init_weights": true,
+  "layers_to_transform": null,
+  "layers_pattern": null,
+  "layer_replication": null,
+  "runtime_config": {
+    "ephemeral_gpu_offload": false
+  },
+  "boft_block_size": 4,
+  "boft_block_num": 1024
+}

@@ -1,0 +1,72 @@
+{
+  "name": "Phase 13: Temperature Annealing Scan",
+  "description": "OER 温度退火策略探索，平滑训练过程",
+  "phase": 13,
+  "priority": "P3 - 低优先级（进阶优化）",
+  "experiments": [
+    {
+      "name": "temp-no_anneal-t2.0",
+      "magnitude": "oer_softmax",
+      "oer_temperature": 2.0,
+      "ecd_temp_annealing": false,
+      "notes": "无退火，默认温度"
+    },
+    {
+      "name": "temp-anneal-t5-1",
+      "magnitude": "oer_softmax",
+      "ecd_temp_annealing": true,
+      "ecd_temp_start": 5.0,
+      "ecd_temp_end": 1.0,
+      "notes": "温度从 5 降到 1"
+    },
+    {
+      "name": "temp-anneal-t10-1",
+      "magnitude": "oer_softmax",
+      "ecd_temp_annealing": true,
+      "ecd_temp_start": 10.0,
+      "ecd_temp_end": 1.0,
+      "notes": "温度从 10 降到 1"
+    },
+    {
+      "name": "temp-anneal-t3-0.5",
+      "magnitude": "oer_softmax",
+      "ecd_temp_annealing": true,
+      "ecd_temp_start": 3.0,
+      "ecd_temp_end": 0.5,
+      "notes": "温度从 3 降到 0.5"
+    },
+    {
+      "name": "temp-fixed1.0",
+      "magnitude": "oer_softmax",
+      "oer_temperature": 1.0,
+      "ecd_temp_annealing": false,
+      "notes": "固定低温 baseline"
+    },
+    {
+      "name": "temp-fixed-t5.0",
+      "magnitude": "oer_softmax",
+      "oer_temperature": 5.0,
+      "ecd_temp_annealing": false,
+      "notes": "固定高温 baseline"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "温度退火可能在训练后期提供更稳定的收敛"
+}
+

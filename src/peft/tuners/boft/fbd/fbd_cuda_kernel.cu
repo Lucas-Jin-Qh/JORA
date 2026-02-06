@@ -63,7 +63,7 @@ std::vector<at::Tensor> forward_fast_block_diag_cuda(
     // initlaize output
     auto output = at::zeros({z, N*b, N*b}, input.options());
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.type(), "forward_fast_block_diag1", ([&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "forward_fast_block_diag1", ([&] {
         forward_fast_block_diag_cuda_kernel<scalar_t><<<blocks_1, threads>>>(
         input.data_ptr<scalar_t>(),
         output.data_ptr<scalar_t>(),
@@ -94,7 +94,7 @@ std::vector<at::Tensor> backward_fast_block_diag_cuda(
     // initialize grad input
     auto grad_input = at::zeros_like(input);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_output.type(), "backward_fast_block_diag", ([&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_output.scalar_type(), "backward_fast_block_diag", ([&] {
         backward_fast_block_diag_cuda_kernel<scalar_t><<<blocks_1, threads>>>(
         grad_output.data_ptr<scalar_t>(),
         grad_input.data_ptr<scalar_t>(),

@@ -1,0 +1,58 @@
+{
+  "name": "Phase 11: Fine-Grained Block Size Scan",
+  "description": "细粒度 Block Size 扫描，填补 4 和 8 之间的空白",
+  "phase": 11,
+  "priority": "P2 - 中优先级",
+  "experiments": [
+    {
+      "name": "block_size-1",
+      "block_size": 1,
+      "expected_params": "~29K",
+      "notes": "极小 block，接近 diag"
+    },
+    {
+      "name": "block_size-3",
+      "block_size": 3,
+      "expected_params": "~86K",
+      "notes": "3 介于 2 和 4 之间"
+    },
+    {
+      "name": "block_size-5",
+      "block_size": 5,
+      "expected_params": "~143K",
+      "notes": "5 介于 4 和 6 之间"
+    },
+    {
+      "name": "block_size-6",
+      "block_size": 6,
+      "expected_params": "~172K",
+      "notes": "6 接近 8 但更小"
+    },
+    {
+      "name": "block_size-12",
+      "block_size": 12,
+      "expected_params": "~343K",
+      "notes": "更大 block，表达能力强"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "细粒度扫描找到最佳的 block_size 参数"
+}
+

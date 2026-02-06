@@ -1,0 +1,53 @@
+{
+  "name": "Phase 16: Model Comparison",
+  "description": "不同模型上的表现对比，验证 JORA 的通用性",
+  "phase": 16,
+  "priority": "P1 - 高优先级（通用性验证）",
+  "experiments": [
+    {
+      "name": "model-llama2-7b",
+      "model_name_or_path": "meta-llama/Llama-2-7b-hf",
+      "expected_params": "~115K",
+      "notes": "Llama-2-7B 默认配置"
+    },
+    {
+      "name": "model-mistral-7b",
+      "model_name_or_path": "mistralai/Mistral-7B-v0.1",
+      "expected_params": "~115K",
+      "notes": "Mistral-7B 基础模型"
+    },
+    {
+      "name": "model-mistral-instruct",
+      "model_name_or_path": "mistralai/Mistral-7B-Instruct-v0.2",
+      "expected_params": "~115K",
+      "notes": "Mistral-7B 指令微调版"
+    },
+    {
+      "name": "model-qwen2-7b",
+      "model_name_or_path": "Qwen/Qwen2-7B",
+      "expected_params": "~115K",
+      "notes": "Qwen2-7B"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "验证 JORA 在不同模型架构上的表现"
+}
+

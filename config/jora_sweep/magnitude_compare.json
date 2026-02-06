@@ -1,0 +1,67 @@
+{
+  "name": "Phase 4: Magnitude Module Comparison",
+  "description": "对比不同 magnitude 模块的效果",
+  "phase": 4,
+  "priority": "P2 - 中优先级",
+  "experiments": [
+    {
+      "name": "mag-none",
+      "magnitude": "none",
+      "expected_params": "~110K",
+      "notes": "无幅度模块，最少参数"
+    },
+    {
+      "name": "mag-ecd_tanh",
+      "magnitude": "ecd_tanh",
+      "ecd_temperature": 1.0,
+      "expected_params": "~115K",
+      "notes": "Legacy ECD tanh，对标 DoRA-style"
+    },
+    {
+      "name": "mag-oer_t0.5",
+      "magnitude": "oer_softmax",
+      "oer_temperature": 0.5,
+      "expected_params": "~115K",
+      "notes": "OER 低温，竞争激烈"
+    },
+    {
+      "name": "mag-oer_t1.0",
+      "magnitude": "oer_softmax",
+      "oer_temperature": 1.0,
+      "expected_params": "~115K",
+      "notes": "OER 默认温度"
+    },
+    {
+      "name": "mag-oer_t2.0",
+      "magnitude": "oer_softmax",
+      "oer_temperature": 2.0,
+      "expected_params": "~115K",
+      "notes": "OER 高温，默认推荐"
+    },
+    {
+      "name": "mag-oer_t5.0",
+      "magnitude": "oer_softmax",
+      "oer_temperature": 5.0,
+      "expected_params": "~115K",
+      "notes": "OER 超高温，竞争平缓"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "验证 OER softmax 相比 ECD tanh 和无 magnitude 的优势"
+}
+

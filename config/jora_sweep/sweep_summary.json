@@ -1,0 +1,67 @@
+{
+  "name": "JORA Sweep - All Experiments Combined",
+  "description": "所有扫描实验的汇总配置，用于批量执行",
+  "version": "1.0",
+  "total_experiments": 31,
+  "estimated_time": "3-5 天 (A100 8卡)",
+  "phases": [
+    {
+      "file": "block_s_k_sweep.json",
+      "n_experiments": 10,
+      "priority": "P0",
+      "estimated_hours": 24
+    },
+    {
+      "file": "block_size_sweep.json",
+      "n_experiments": 3,
+      "priority": "P1",
+      "estimated_hours": 6
+    },
+    {
+      "file": "selection_refine.json",
+      "n_experiments": 7,
+      "priority": "P1",
+      "estimated_hours": 12
+    },
+    {
+      "file": "magnitude_compare.json",
+      "n_experiments": 6,
+      "priority": "P2",
+      "estimated_hours": 6
+    },
+    {
+      "file": "rotation_compare.json",
+      "n_experiments": 2,
+      "priority": "P3",
+      "estimated_hours": 2
+    },
+    {
+      "file": "diag_baseline.json",
+      "n_experiments": 3,
+      "priority": "P0",
+      "estimated_hours": 6
+    }
+  ],
+  "recommended_execution_order": [
+    "main_config.json",      # 先跑主配置确认基线
+    "block_s_k_sweep.json",  # Phase 1: S/k 扫描
+    "block_size_sweep.json", # Phase 2: Block size 扫描
+    "diag_baseline.json",    # Diag 基线对比
+    "selection_refine.json", # Phase 3: Selection 细化
+    "magnitude_compare.json",# Phase 4: Magnitude 对比
+    "rotation_compare.json"  # Phase 5: Rotation 对比
+  ],
+  "common_training_args": {
+    "model_name_or_path": "meta-llama/Llama-2-7b-hf",
+    "dataset_name": "tatsu-lab/alpaca",
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 4,
+    "learning_rate": 2e-4,
+    "torch_dtype": "bfloat16",
+    "gradient_accumulation_steps": 8,
+    "warmup_ratio": 0.03,
+    "lr_scheduler_type": "cosine",
+    "weight_decay": 0.01
+  }
+}
+

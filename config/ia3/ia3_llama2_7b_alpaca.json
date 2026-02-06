@@ -1,0 +1,33 @@
+{
+  "peft_type": "IA3",
+  "auto_mapping": null,
+  "base_model_name_or_path": null,
+  "revision": null,
+  "task_type": "CAUSAL_LM",
+  "inference_mode": false,
+  "target_modules": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "up_proj",
+    "gate_proj",
+    "down_proj"
+  ],
+  "feedforward_modules": [
+    "up_proj",
+    "gate_proj",
+    "down_proj"
+  ],
+  "exclude_modules": null,
+  "fan_in_fan_out": false,
+  "modules_to_save": null,
+  "init_ia3_weights": true,
+  "layers_to_transform": null,
+  "layers_pattern": null,
+  "layer_replication": null,
+  "runtime_config": {
+    "ephemeral_gpu_offload": false
+  }
+}
+

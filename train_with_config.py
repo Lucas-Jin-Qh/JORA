@@ -67,6 +67,21 @@ def estimate_parameters(config: dict, model_name: str = "Llama-2-7b") -> dict:
         else:
             trainable_params = 0
 
+    elif peft_type == "BOFT":
+        # BOFT 参数估算
+        boft_block_size = config.get('boft_block_size', 4)
+        boft_block_num = config.get('boft_block_num', 0)
+        boft_n_butterfly_factor = config.get('boft_n_butterfly_factor', 1)
+        n_modules = len(config.get('target_modules', []))
+        # BOFT参数 = block_size * block_num * n_modules * butterfly_factor * 4096
+        trainable_params = boft_block_size * boft_block_num * n_modules * boft_n_butterfly_factor * 4096
+
+    elif peft_type == "IA3":
+        # IA3 参数估算：只需要目标模块的输出维度向量
+        n_modules = len(config.get('target_modules', []))
+        # IA3 主要学习一个缩放向量 (output_dim)，参数量约为 n_modules * output_dim
+        trainable_params = 4096 * n_modules  # 简化为 4096 维度估算
+
     return {
         'base_params': base_params,
         'trainable_params': trainable_params,
@@ -90,7 +105,8 @@ def create_training_command(
     disable_wandb: bool = False,
     eval_steps: int = None,
     eval_strategy: str = "no",
-    torch_dtype: str = "auto"
+    torch_dtype: str = "auto",
+    gradient_accumulation_steps: int = 8
 ) -> str:
     """从PEFT配置文件生成训练命令"""
 
@@ -135,7 +151,7 @@ def create_training_command(
         "--max_grad_norm 1.0",
         f"--output_dir {output_dir}",
         f"--per_device_train_batch_size {batch_size}",
-        "--gradient_accumulation_steps 8",
+        f"--gradient_accumulation_steps {gradient_accumulation_steps}",
         "--gradient_checkpointing",
         "--use_reentrant",
         "--dataset_text_field text"
@@ -227,6 +243,78 @@ def create_training_command(
         if peft_config.get('use_4bit', False):
             cmd_parts.append("--use_4bit_quantization")
 
+    elif peft_type == "BOFT":
+        cmd_parts.append("--use_peft_boft")
+        # BOFT 只能指定 boft_block_size 或 boft_block_num 中的一个
+        boft_block_size = peft_config.get('boft_block_size', 0)
+        boft_block_num = peft_config.get('boft_block_num', 0)
+
+        # 只添加其中一个参数
+        if boft_block_size > 0:
+            cmd_parts.append(f"--boft_block_size {boft_block_size}")
+        elif boft_block_num > 0:
+            cmd_parts.append(f"--boft_block_num {boft_block_num}")
+
+        cmd_parts.append(f"--boft_n_butterfly_factor {peft_config.get('boft_n_butterfly_factor', 1)}")
+        cmd_parts.append(f"--boft_dropout {peft_config.get('boft_dropout', 0.0)}")
+        cmd_parts.append(f"--boft_fan_in_fan_out {str(peft_config.get('fan_in_fan_out', False)).lower()}")
+        cmd_parts.append(f"--boft_bias {peft_config.get('bias', 'none')}")
+        cmd_parts.append(f"--boft_init_weights {str(peft_config.get('init_weights', True)).lower()}")
+
+        # 目标模块
+        if 'target_modules' in peft_config and peft_config['target_modules'] is not None:
+            if isinstance(peft_config['target_modules'], list):
+                cmd_parts.append(f"--boft_target_modules {','.join(peft_config['target_modules'])}")
+            else:
+                cmd_parts.append(f"--boft_target_modules {peft_config['target_modules']}")
+
+        # layers_to_transform / layers_pattern
+        if 'layers_to_transform' in peft_config and peft_config['layers_to_transform'] is not None:
+            if isinstance(peft_config['layers_to_transform'], list):
+                cmd_parts.append(f"--boft_layers_to_transform {','.join(map(str, peft_config['layers_to_transform']))}")
+            else:
+                cmd_parts.append(f"--boft_layers_to_transform {peft_config['layers_to_transform']}")
+        if 'layers_pattern' in peft_config and peft_config['layers_pattern'] is not None:
+            if isinstance(peft_config['layers_pattern'], list):
+                cmd_parts.append(f"--boft_layers_pattern {','.join(peft_config['layers_pattern'])}")
+            else:
+                cmd_parts.append(f"--boft_layers_pattern {peft_config['layers_pattern']}")
+
+        # modules_to_save
+        if 'modules_to_save' in peft_config and peft_config['modules_to_save'] is not None:
+            cmd_parts.append(f"--boft_modules_to_save {','.join(peft_config['modules_to_save'])}")
+
+        # 量化/后端相关（保留开关）
+        if peft_config.get('use_4bit', False):
+            cmd_parts.append("--use_4bit_quantization")
+
+    elif peft_type == "IA3":
+        cmd_parts.append("--use_peft_ia3")
+        # 目标模块
+        if 'target_modules' in peft_config and peft_config['target_modules'] is not None:
+            if isinstance(peft_config['target_modules'], list):
+                cmd_parts.append(f"--ia3_target_modules {','.join(peft_config['target_modules'])}")
+            else:
+                cmd_parts.append(f"--ia3_target_modules {peft_config['target_modules']}")
+
+        # feedforward_modules
+        if 'feedforward_modules' in peft_config and peft_config['feedforward_modules'] is not None:
+            if isinstance(peft_config['feedforward_modules'], list):
+                cmd_parts.append(f"--ia3_feedforward_modules {','.join(peft_config['feedforward_modules'])}")
+            else:
+                cmd_parts.append(f"--ia3_feedforward_modules {peft_config['feedforward_modules']}")
+
+        cmd_parts.append(f"--ia3_fan_in_fan_out {str(peft_config.get('fan_in_fan_out', False)).lower()}")
+        cmd_parts.append(f"--ia3_init_weights {str(peft_config.get('init_ia3_weights', True)).lower()}")
+
+        # modules_to_save
+        if 'modules_to_save' in peft_config and peft_config['modules_to_save'] is not None:
+            cmd_parts.append(f"--ia3_modules_to_save {','.join(peft_config['modules_to_save'])}")
+
+        # 量化/后端相关（保留开关）
+        if peft_config.get('use_4bit', False):
+            cmd_parts.append("--use_4bit_quantization")
+
     # cmd_parts.append("--use_flash_attn True")  # 需要额外安装flash_attn包
 
     # 添加量化相关参数（如果启用）
@@ -270,6 +358,7 @@ def main():
     parser.add_argument("--disable_wandb", action="store_true", help="禁用wandb日志记录")
     parser.add_argument("--torch_dtype", type=str, default="auto", help="模型精度(auto/float16/bfloat16/float32)")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="梯度累积步数")
     parser.add_argument("--execute", action="store_true", help="直接执行命令")
 
     args = parser.parse_args()
@@ -286,6 +375,7 @@ def main():
         torch_dtype=args.torch_dtype,
         max_length=args.max_length,
         seed=args.seed,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         use_4bit=args.use_4bit,
         use_nested_quant=args.use_nested_quant,
         push_to_hub=args.push_to_hub,
@@ -311,6 +401,11 @@ def main():
         print(f"LoRA Rank: {config['r']}")
         print(f"LoRA Alpha: {config['lora_alpha']}")
         print(f"Dropout: {config['lora_dropout']}")
+    elif peft_type == "IA3":
+        print(f"Target Modules: {config.get('target_modules', [])}")
+        if config.get('feedforward_modules'):
+            print(f"Feedforward Modules: {config['feedforward_modules']}")
+        print(f"Init IA3 Weights: {config.get('init_ia3_weights', True)}")
 
     print(f"Target Modules: {len(config['target_modules'])} 个")
     print(f"PEFT Type: {peft_type}")

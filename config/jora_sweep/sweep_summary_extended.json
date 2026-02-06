@@ -1,0 +1,191 @@
+{
+  "name": "JORA Sweep - All Experiments Combined (Extended)",
+  "description": "所有扫描实验的汇总配置，包含扩展扫描",
+  "version": "2.0",
+  "total_experiments": 93,
+  "estimated_time": "2-3 周 (A100 8卡)",
+  "phases": [
+    {
+      "file": "main_config.json",
+      "n_experiments": 1,
+      "priority": "P0",
+      "estimated_hours": 2,
+      "notes": "主实验配置"
+    },
+    {
+      "file": "block_s_k_sweep.json",
+      "n_experiments": 10,
+      "priority": "P0",
+      "estimated_hours": 24,
+      "notes": "S/k 精细扫描"
+    },
+    {
+      "file": "block_size_sweep.json",
+      "n_experiments": 3,
+      "priority": "P1",
+      "estimated_hours": 6,
+      "notes": "Block Size 扫描"
+    },
+    {
+      "file": "diag_baseline.json",
+      "n_experiments": 3,
+      "priority": "P0",
+      "estimated_hours": 6,
+      "notes": "Diag 基线对比"
+    },
+    {
+      "file": "selection_refine.json",
+      "n_experiments": 7,
+      "priority": "P1",
+      "estimated_hours": 12,
+      "notes": "Selection 细化"
+    },
+    {
+      "file": "magnitude_compare.json",
+      "n_experiments": 6,
+      "priority": "P2",
+      "estimated_hours": 6,
+      "notes": "Magnitude 对比"
+    },
+    {
+      "file": "rotation_compare.json",
+      "n_experiments": 2,
+      "priority": "P3",
+      "estimated_hours": 2,
+      "notes": "Rotation 对比"
+    },
+    {
+      "file": "ablation_study.json",
+      "n_experiments": 9,
+      "priority": "P0",
+      "estimated_hours": 18,
+      "notes": "结构消融实验"
+    },
+    {
+      "file": "lowrank_explore.json",
+      "n_experiments": 4,
+      "priority": "P2",
+      "estimated_hours": 8,
+      "notes": "LowRank Core 探索"
+    },
+    {
+      "file": "asymmetric_scan.json",
+      "n_experiments": 6,
+      "priority": "P3",
+      "estimated_hours": 8,
+      "notes": "不对称 S_L/S_R 扫描"
+    },
+    {
+      "file": "pairing_strategy_scan.json",
+      "n_experiments": 4,
+      "priority": "P3",
+      "estimated_hours": 4,
+      "notes": "Pairing Strategy 扫描"
+    },
+    {
+      "file": "learning_rate_scan.json",
+      "n_experiments": 8,
+      "priority": "P2",
+      "estimated_hours": 12,
+      "notes": "学习率交互扫描"
+    },
+    {
+      "file": "fine_block_size_scan.json",
+      "n_experiments": 5,
+      "priority": "P2",
+      "estimated_hours": 8,
+      "notes": "细粒度 Block Size 扫描"
+    },
+    {
+      "file": "all_linear_track.json",
+      "n_experiments": 4,
+      "priority": "P1",
+      "estimated_hours": 12,
+      "notes": "B轨 All-Linear 配置"
+    },
+    {
+      "file": "temperature_annealing.json",
+      "n_experiments": 6,
+      "priority": "P3",
+      "estimated_hours": 6,
+      "notes": "温度退火扫描"
+    },
+    {
+      "file": "ema_grid_scan.json",
+      "n_experiments": 10,
+      "priority": "P2",
+      "estimated_hours": 12,
+      "notes": "EMA 参数网格扫描"
+    },
+    {
+      "file": "dataset_comparison.json",
+      "n_experiments": 5,
+      "priority": "P1",
+      "estimated_hours": 20,
+      "notes": "数据集对比"
+    },
+    {
+      "file": "model_comparison.json",
+      "n_experiments": 4,
+      "priority": "P1",
+      "estimated_hours": 16,
+      "notes": "模型对比"
+    },
+    {
+      "file": "batch_lr_interaction.json",
+      "n_experiments": 6,
+      "priority": "P2",
+      "estimated_hours": 8,
+      "notes": "Batch/LR 交互"
+    },
+    {
+      "file": "advanced_ablation.json",
+      "n_experiments": 8,
+      "priority": "P3",
+      "estimated_hours": 8,
+      "notes": "高级消融"
+    }
+  ],
+  "recommended_execution_order": [
+    "main_config.json",              # Step 0: 主配置确认
+    "block_s_k_sweep.json",          # Step 1: S/k 扫描 (最重要)
+    "block_size_sweep.json",         # Step 2: Block size 扫描
+    "diag_baseline.json",            # Step 3: Diag 基线
+    "selection_refine.json",         # Step 4: Selection 细化
+    "magnitude_compare.json",        # Step 5: Magnitude 对比
+    "lowrank_explore.json",          # Step 6: LowRank 探索
+    "learning_rate_scan.json",       # Step 7: 学习率扫描
+    "ema_grid_scan.json",            # Step 8: EMA 网格
+    "all_linear_track.json",         # Step 9: B轨配置
+    "dataset_comparison.json",       # Step 10: 数据集对比
+    "model_comparison.json",         # Step 11: 模型对比
+    "batch_lr_interaction.json",     # Step 12: Batch/LR 交互
+    "rotation_compare.json",         # Step 13: Rotation 对比
+    "ablation_study.json",           # Step 14: 消融实验
+    "fine_block_size_scan.json",     # Step 15: 细粒度 Block
+    "pairing_strategy_scan.json",    # Step 16: Pairing Strategy
+    "asymmetric_scan.json",          # Step 17: 不对称扫描
+    "temperature_annealing.json",    # Step 18: 温度退火
+    "advanced_ablation.json"         # Step 19: 高级消融
+  ],
+  "common_training_args": {
+    "model_name_or_path": "meta-llama/Llama-2-7b-hf",
+    "dataset_name": "tatsu-lab/alpaca",
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 4,
+    "learning_rate": 2e-4,
+    "torch_dtype": "bfloat16",
+    "gradient_accumulation_steps": 8,
+    "warmup_ratio": 0.03,
+    "lr_scheduler_type": "cosine",
+    "weight_decay": 0.01
+  },
+  "key_findings_to_validate": [
+    "Block > Diag (您的预实验结论)",
+    "S/k 覆盖率与性能正相关 (预期饱和点在 ~0.6%)",
+    "topk_ema > random > none (选择机制有效性)",
+    "oer_softmax > ecd_tanh (幅度模块优势)",
+    "cayley > angle (旋转参数化)"
+  ]
+}
+

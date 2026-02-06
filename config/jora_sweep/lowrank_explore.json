@@ -1,0 +1,64 @@
+{
+  "name": "Phase 7: LowRank Core Exploration",
+  "description": "探索 LowRank Core 类型，验证其表达能力与参数效率",
+  "phase": 7,
+  "priority": "P2 - 中优先级（表达式能力对比）",
+  "experiments": [
+    {
+      "name": "lowrank-r4",
+      "core": "lowrank",
+      "lowrank_r": 4,
+      "S_L": 16,
+      "S_R": 16,
+      "k": 4,
+      "expected_params": "~130K",
+      "notes": "最小 lowrank，参数量最少"
+    },
+    {
+      "name": "lowrank-r8",
+      "core": "lowrank",
+      "lowrank_r": 8,
+      "S_L": 32,
+      "S_R": 32,
+      "k": 8,
+      "expected_params": "~260K",
+      "notes": "中等 lowrank，与 block 可比"
+    },
+    {
+      "name": "lowrank-r16",
+      "core": "lowrank",
+      "lowrank_r": 16,
+      "S_L": 32,
+      "S_R": 32,
+      "k": 8,
+      "expected_params": "~520K",
+      "notes": "较大 lowrank，表达能力强"
+    },
+    {
+      "name": "lowrank-r8-S64",
+      "core": "lowrank",
+      "lowrank_r": 8,
+      "S_L": 64,
+      "S_R": 64,
+      "k": 16,
+      "expected_params": "~270K",
+      "notes": "LowRank + 更大 S/k"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "LowRank 类型的参数量约为 (input+output)*r*modules，可与 LoRA 风格对比"
+}
+

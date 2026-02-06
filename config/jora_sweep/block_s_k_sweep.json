@@ -1,0 +1,110 @@
+{
+  "name": "Phase 1: Block S/k Sweep",
+  "description": "在 block 类型下进行 S/k 精细扫描，找到最优覆盖率组合",
+  "phase": 1,
+  "priority": "P0 - 最高优先级",
+  "core_type": "block",
+  "block_size": 4,
+  "target_modules": ["q_proj", "v_proj"],
+  "experiments": [
+    {
+      "name": "block-S32-k8",
+      "S_L": 32,
+      "S_R": 32,
+      "k": 8,
+      "coverage_rate": "0.20%",
+      "expected_params": "~115K"
+    },
+    {
+      "name": "block-S32-k16",
+      "S_L": 32,
+      "S_R": 32,
+      "k": 16,
+      "coverage_rate": "0.39%",
+      "expected_params": "~115K"
+    },
+    {
+      "name": "block-S64-k8",
+      "S_L": 64,
+      "S_R": 64,
+      "k": 8,
+      "coverage_rate": "0.20%",
+      "expected_params": "~115K"
+    },
+    {
+      "name": "block-S64-k16",
+      "S_L": 64,
+      "S_R": 64,
+      "k": 16,
+      "coverage_rate": "0.39%",
+      "expected_params": "~115K"
+    },
+    {
+      "name": "block-S64-k24",
+      "S_L": 64,
+      "S_R": 64,
+      "k": 24,
+      "coverage_rate": "0.59%",
+      "expected_params": "~115K"
+    },
+    {
+      "name": "block-S96-k16",
+      "S_L": 96,
+      "S_R": 96,
+      "k": 16,
+      "coverage_rate": "0.39%",
+      "expected_params": "~115K"
+    },
+    {
+      "name": "block-S96-k24",
+      "S_L": 96,
+      "S_R": 96,
+      "k": 24,
+      "coverage_rate": "0.59%",
+      "expected_params": "~115K"
+    },
+    {
+      "name": "block-S96-k32",
+      "S_L": 96,
+      "S_R": 96,
+      "k": 32,
+      "coverage_rate": "0.78%",
+      "expected_params": "~116K"
+    },
+    {
+      "name": "block-S128-k24",
+      "S_L": 128,
+      "S_R": 128,
+      "k": 24,
+      "coverage_rate": "0.59%",
+      "expected_params": "~116K"
+    },
+    {
+      "name": "block-S128-k32",
+      "S_L": 128,
+      "S_R": 128,
+      "k": 32,
+      "coverage_rate": "0.78%",
+      "expected_params": "~117K"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "core": "block",
+    "block_size": 4,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "rotation_impl": "auto",
+    "max_angle": 0.1,
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "目标是找到 Block 下的最优 S/k 组合，预期在 coverage ~0.6% 附近达到饱和"
+}
+

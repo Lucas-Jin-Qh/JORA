@@ -1,0 +1,66 @@
+{
+  "name": "Phase 12: All-Linear Track (Track B)",
+  "description": "B轨配置：target_modules=all-linear，强适配模式",
+  "phase": 12,
+  "priority": "P1 - 高优先级（双轨对比）",
+  "experiments": [
+    {
+      "name": "all_linear-diag",
+      "target_modules": "all-linear",
+      "core": "diag",
+      "S_L": 32,
+      "S_R": 32,
+      "k": 8,
+      "expected_params": "~200K",
+      "notes": "All-Linear + Diag，最少参数"
+    },
+    {
+      "name": "all_linear-block",
+      "target_modules": "all-linear",
+      "core": "block",
+      "block_size": 4,
+      "S_L": 32,
+      "S_R": 32,
+      "k": 8,
+      "expected_params": "~400K",
+      "notes": "All-Linear + Block，推荐配置"
+    },
+    {
+      "name": "all_linear-lowrank",
+      "target_modules": "all-linear",
+      "core": "lowrank",
+      "lowrank_r": 4,
+      "S_L": 16,
+      "S_R": 16,
+      "k": 4,
+      "expected_params": "~520K",
+      "notes": "All-Linear + LowRank，LoRA 风格"
+    },
+    {
+      "name": "all_linear-block-S64",
+      "target_modules": "all-linear",
+      "core": "block",
+      "block_size": 4,
+      "S_L": 64,
+      "S_R": 64,
+      "k": 16,
+      "expected_params": "~450K",
+      "notes": "All-Linear + Block + 更大 S/k"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "B轨配置，覆盖更多模块，参数量显著增加，需注意显存"
+}
+

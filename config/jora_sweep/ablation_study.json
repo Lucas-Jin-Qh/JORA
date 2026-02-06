@@ -1,0 +1,92 @@
+{
+  "name": "Phase 6: Ablation Study (结构消融实验)",
+  "description": "JORA 创新点拆解消融：Rotation / Selection / Core / Magnitude",
+  "phase": 6,
+  "priority": "P0 - 论文核心实验",
+  "experiments": [
+    {
+      "name": "abl-no_rotation",
+      "S_L": 0,
+      "S_R": 0,
+      "notes": "去除旋转模块，只保留 core，对比旋转的贡献"
+    },
+    {
+      "name": "abl-single_left",
+      "single_sided": "left",
+      "notes": "单侧旋转（左），验证对称性设计"
+    },
+    {
+      "name": "abl-single_right",
+      "single_sided": "right",
+      "notes": "单侧旋转（右），验证对称性设计"
+    },
+    {
+      "name": "abl-no_selection",
+      "selection": "none",
+      "notes": "静态选择，无稀疏更新"
+    },
+    {
+      "name": "abl-random_sel",
+      "selection": "random",
+      "notes": "随机选择，证明 topk 有效性"
+    },
+    {
+      "name": "abl-core-diag",
+      "core": "diag",
+      "S_L": 96,
+      "S_R": 96,
+      "k": 24,
+      "notes": "Core=diag，与 block 对比表达能力"
+    },
+    {
+      "name": "abl-core-lowrank",
+      "core": "lowrank",
+      "lowrank_r": 8,
+      "S_L": 32,
+      "S_R": 32,
+      "k": 8,
+      "notes": "Core=lowrank，验证低秩表达能力"
+    },
+    {
+      "name": "abl-no_mag",
+      "magnitude": "none",
+      "notes": "无 magnitude 模块"
+    },
+    {
+      "name": "abl-mag-ecd",
+      "magnitude": "ecd_tanh",
+      "notes": "Legacy ECD magnitude"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "rotation_param": "cayley",
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "expected_results": {
+    "no_rotation": "预期性能下降，验证旋转机制贡献",
+    "single_side": "预期性能介于 full 和 no_rotation 之间",
+    "no_selection": "预期性能略低于 topk_ema，验证稀疏更新有效性",
+    "random_sel": "预期性能低于 topk_ema，证明选择不是噪声",
+    "core-diag": "预期性能低于 block，验证 block 表达能力",
+    "core-lowrank": "预期性能与 block 可比，验证低秩表达能力",
+    "no_mag": "预期性能下降，验证 magnitude 模块贡献",
+    "mag-ecd": "预期性能与 oer_softmax 可比或略低"
+  },
+  "notes": "每个消融必须报告 ARC/GSM8K 的 Δ 和 tokens/s"
+}
+

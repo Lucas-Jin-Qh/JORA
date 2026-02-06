@@ -1,0 +1,55 @@
+{
+  "name": "Phase 9: Pairing Strategy Scan",
+  "description": "探索 Pairing Strategy 对性能的影响：consecutive vs high_low",
+  "phase": 9,
+  "priority": "P3 - 低优先级（机制验证）",
+  "experiments": [
+    {
+      "name": "pair-consecutive",
+      "pairing_strategy": "consecutive",
+      "notes": "连续配对（默认）"
+    },
+    {
+      "name": "pair-high_low",
+      "pairing_strategy": "high_low",
+      "notes": "高低配对，跨维度配对"
+    },
+    {
+      "name": "pair-consecutive-S64",
+      "pairing_strategy": "consecutive",
+      "S_L": 64,
+      "S_R": 64,
+      "k": 16,
+      "notes": "连续配对较小配置"
+    },
+    {
+      "name": "pair-high_low-S64",
+      "pairing_strategy": "high_low",
+      "S_L": 64,
+      "S_R": 64,
+      "k": 16,
+      "notes": "高低配对较小配置"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "验证 pairing_strategy 对选择机制的影响，high_low 可能在某些任务上更好"
+}
+

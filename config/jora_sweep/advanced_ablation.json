@@ -1,0 +1,76 @@
+{
+  "name": "Phase 18: Advanced Ablation - Gumbel & Selection Group",
+  "description": "高级消融：Gumbel 采样和 Selection Group",
+  "phase": 18,
+  "priority": "P3 - 低优先级（进阶机制）",
+  "experiments": [
+    {
+      "name": "gumbel-disable",
+      "use_gumbel": false,
+      "notes": "不使用 Gumbel（默认）"
+    },
+    {
+      "name": "gumbel-enable-tau1.0",
+      "use_gumbel": true,
+      "gumbel_tau": 1.0,
+      "notes": "Gumbel 采样，tau=1.0"
+    },
+    {
+      "name": "gumbel-enable-tau0.5",
+      "use_gumbel": true,
+      "gumbel_tau": 0.5,
+      "notes": "Gumbel 采样，tau=0.5"
+    },
+    {
+      "name": "gumbel-enable-tau2.0",
+      "use_gumbel": true,
+      "gumbel_tau": 2.0,
+      "notes": "Gumbel 采样，tau=2.0"
+    },
+    {
+      "name": "group-size1",
+      "selection_group_size": 1,
+      "selection_group_by": "dimension",
+      "notes": "每模块独立选择"
+    },
+    {
+      "name": "group-size2",
+      "selection_group_size": 2,
+      "selection_group_by": "dimension",
+      "notes": "2 个模块共享选择"
+    },
+    {
+      "name": "group-size4",
+      "selection_group_size": 4,
+      "selection_group_by": "dimension",
+      "notes": "4 个模块共享选择"
+    },
+    {
+      "name": "group-by-type",
+      "selection_group_size": 2,
+      "selection_group_by": "type",
+      "notes": "按模块类型分组"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "探索 Gumbel 软化选择和分组共享选择机制"
+}
+

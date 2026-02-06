@@ -1,0 +1,48 @@
+{
+  "name": "Phase 2: Block Size Sweep",
+  "description": "探索不同 block 大小对性能和参数量的影响",
+  "phase": 2,
+  "priority": "P1 - 高优先级",
+  "experiments": [
+    {
+      "name": "block_size-2",
+      "block_size": 2,
+      "coverage_rate": "0.05%",
+      "expected_params": "~57K",
+      "notes": "最小 block，参数量最少"
+    },
+    {
+      "name": "block_size-4",
+      "block_size": 4,
+      "coverage_rate": "0.10%",
+      "expected_params": "~115K",
+      "notes": "中等 block，默认推荐"
+    },
+    {
+      "name": "block_size-8",
+      "block_size": 8,
+      "coverage_rate": "0.20%",
+      "expected_params": "~229K",
+      "notes": "最大 block，参数量翻倍"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "core": "block",
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "Block size 越大，core 参数量越多，模型表达能力越强"
+}
+

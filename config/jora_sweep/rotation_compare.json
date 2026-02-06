@@ -1,0 +1,37 @@
+{
+  "name": "Phase 5: Rotation Parameterization",
+  "description": "对比 Cayley 和 Angle 两种旋转参数化方式",
+  "phase": 5,
+  "priority": "P3 - 低优先级",
+  "experiments": [
+    {
+      "name": "rot-cayley",
+      "rotation_param": "cayley",
+      "notes": "Cayley 参数化，正交性保证强"
+    },
+    {
+      "name": "rot-angle",
+      "rotation_param": "angle",
+      "notes": "角度参数化，实现简单"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "验证 Cayley 参数化在数值稳定性和最终效果上的优势"
+}
+

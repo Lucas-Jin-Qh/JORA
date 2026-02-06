@@ -1,0 +1,60 @@
+{
+  "name": "Phase 15: Dataset Comparison",
+  "description": "不同数据集上的表现对比，验证 JORA 的泛化性",
+  "phase": 15,
+  "priority": "P1 - 高优先级（泛化性验证）",
+  "experiments": [
+    {
+      "name": "dataset-alpaca",
+      "dataset_name": "tatsu-lab/alpaca",
+      "notes": "Alpaca 基础数据集 (~52k)"
+    },
+    {
+      "name": "dataset-alpaca_cleaned",
+      "dataset_name": "yahma/alpaca-cleaned",
+      "notes": "清洗后的 Alpaca"
+    },
+    {
+      "name": "dataset-gsm8k_main",
+      "dataset_name": "gsm8k:main",
+      "notes": "GSM8K 数学推理 (~8.5k)"
+    },
+    {
+      "name": "dataset-open_orca",
+      "dataset_name": "Open-Orca/openorca",
+      "notes": "OpenOrca (~4.2M)，子集采样 200k"
+    },
+    {
+      "name": "dataset-slimorca",
+      "dataset_name": "Liquid-Research/slimorca",
+      "notes": " SlimOrca 清洗版 (~240k)"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "training_overrides": {
+    "dataset-open_orca": {
+      "num_train_epochs": 2,
+      "learning_rate": 1e-4
+    }
+  },
+  "notes": "验证 JORA 在不同类型数据上的表现，重点关注 GSM8K 数学推理"
+}
+

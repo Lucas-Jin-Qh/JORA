@@ -1,0 +1,68 @@
+{
+  "name": "Phase 8: Asymmetric S_L/S_R Scan",
+  "description": "探索不对称的 S_L 和 S_R 组合，研究左右旋转维度对性能的影响",
+  "phase": 8,
+  "priority": "P3 - 低优先级（探索性实验）",
+  "experiments": [
+    {
+      "name": "asym-S32-S64",
+      "S_L": 32,
+      "S_R": 64,
+      "k": 16,
+      "notes": "左小右大"
+    },
+    {
+      "name": "asym-S64-S32",
+      "S_L": 64,
+      "S_R": 32,
+      "k": 16,
+      "notes": "左大右小"
+    },
+    {
+      "name": "asym-S48-S96",
+      "S_L": 48,
+      "S_R": 96,
+      "k": 24,
+      "notes": "左中右大"
+    },
+    {
+      "name": "asym-S96-S48",
+      "S_L": 96,
+      "S_R": 48,
+      "k": 24,
+      "notes": "左大中右"
+    },
+    {
+      "name": "asym-S64-S64-k8",
+      "S_L": 64,
+      "S_R": 64,
+      "k": 8,
+      "notes": "对称 baseline"
+    },
+    {
+      "name": "asym-S64-S64-k16",
+      "S_L": 64,
+      "S_R": 64,
+      "k": 16,
+      "notes": "对称 baseline"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "探索 S_L ≠ S_R 时模型性能是否有变化，适用于某些非对称结构"
+}
+

@@ -1,0 +1,75 @@
+{
+  "name": "Phase 10: Learning Rate Interaction Scan",
+  "description": "探索 lr_theta 和 lr_core 的交互效应，找到最优学习率组合",
+  "phase": 10,
+  "priority": "P2 - 中优先级（优化器调优）",
+  "experiments": [
+    {
+      "name": "lr-0.05-0.01",
+      "lr_theta": 0.05,
+      "lr_core": 0.01,
+      "notes": "默认配置"
+    },
+    {
+      "name": "lr-0.10-0.01",
+      "lr_theta": 0.10,
+      "lr_core": 0.01,
+      "notes": "高旋转学习率"
+    },
+    {
+      "name": "lr-0.05-0.02",
+      "lr_theta": 0.05,
+      "lr_core": 0.02,
+      "notes": "高核心学习率"
+    },
+    {
+      "name": "lr-0.10-0.02",
+      "lr_theta": 0.10,
+      "lr_core": 0.02,
+      "notes": "双高学习率"
+    },
+    {
+      "name": "lr-0.02-0.01",
+      "lr_theta": 0.02,
+      "lr_core": 0.01,
+      "notes": "低旋转学习率"
+    },
+    {
+      "name": "lr-0.05-0.005",
+      "lr_theta": 0.05,
+      "lr_core": 0.005,
+      "notes": "低核心学习率"
+    },
+    {
+      "name": "lr-0.01-0.01",
+      "lr_theta": 0.01,
+      "lr_core": 0.01,
+      "notes": "双低学习率"
+    },
+    {
+      "name": "lr-0.00-0.01",
+      "lr_theta": 0.00,
+      "lr_core": 0.01,
+      "notes": "冻结旋转，只训练核心"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "ema_beta": 0.95,
+    "update_interval": 50,
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "lr_theta=0 冻结旋转参数，验证旋转是否需要更新"
+}
+

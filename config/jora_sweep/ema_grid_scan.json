@@ -1,0 +1,87 @@
+{
+  "name": "Phase 14: EMA Beta & Update Interval Grid",
+  "description": "EMA beta 和 update_interval 的组合扫描",
+  "phase": 14,
+  "priority": "P2 - 中优先级（细粒度调优）",
+  "experiments": [
+    {
+      "name": "ema-b0.90-u1",
+      "ema_beta": 0.90,
+      "update_interval": 1,
+      "notes": "激进 EMA，实时更新"
+    },
+    {
+      "name": "ema-b0.90-u16",
+      "ema_beta": 0.90,
+      "update_interval": 16,
+      "notes": "激进 EMA，稀疏更新"
+    },
+    {
+      "name": "ema-b0.90-u50",
+      "ema_beta": 0.90,
+      "update_interval": 50,
+      "notes": "激进 EMA，极稀疏更新"
+    },
+    {
+      "name": "ema-b0.95-u1",
+      "ema_beta": 0.95,
+      "update_interval": 1,
+      "notes": "中等 EMA，实时更新"
+    },
+    {
+      "name": "ema-b0.95-u16",
+      "ema_beta": 0.95,
+      "update_interval": 16,
+      "notes": "中等 EMA，平衡更新"
+    },
+    {
+      "name": "ema-b0.95-u50",
+      "ema_beta": 0.95,
+      "update_interval": 50,
+      "notes": "中等 EMA，默认推荐"
+    },
+    {
+      "name": "ema-b0.98-u1",
+      "ema_beta": 0.98,
+      "update_interval": 1,
+      "notes": "保守 EMA，实时更新"
+    },
+    {
+      "name": "ema-b0.98-u16",
+      "ema_beta": 0.98,
+      "update_interval": 16,
+      "notes": "保守 EMA，平衡更新"
+    },
+    {
+      "name": "ema-b0.98-u50",
+      "ema_beta": 0.98,
+      "update_interval": 50,
+      "notes": "保守 EMA，极稀疏更新"
+    },
+    {
+      "name": "ema-b0.98-u100",
+      "ema_beta": 0.98,
+      "update_interval": 100,
+      "notes": "保守 EMA，超稀疏更新"
+    }
+  ],
+  "fixed_params": {
+    "peft_type": "JORA",
+    "target_modules": ["q_proj", "v_proj"],
+    "core": "block",
+    "block_size": 4,
+    "S_L": 96,
+    "S_R": 96,
+    "k": 24,
+    "selection": "topk_ema",
+    "magnitude": "oer_softmax",
+    "oer_temperature": 2.0,
+    "rotation_param": "cayley",
+    "lr_theta": 0.05,
+    "lr_core": 0.01,
+    "inference_mode": false,
+    "ddp_allow_unused_parameters": true
+  },
+  "notes": "3×4 网格，共 12 组实验"
+}
+

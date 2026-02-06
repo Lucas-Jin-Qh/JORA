@@ -12,7 +12,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
-from peft import LoraConfig, JoraConfig, OFTConfig
+from peft import LoraConfig, JoraConfig, OFTConfig, BOFTConfig, IA3Config
 
 
 DEFAULT_CHATML_CHAT_TEMPLATE = "{% for message in messages %}\n{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% if loop.last and add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}{% endfor %}"
@@ -300,6 +300,61 @@ def create_and_prepare_model(args, data_args, training_args):
             block_share=args.oft_block_share,
             use_cayley_neumann=args.oft_use_cayley_neumann,
             num_cayley_neumann_terms=args.oft_num_cayley_neumann_terms,
+            inference_mode=False,
+        )
+    elif args.use_peft_boft and not args.use_unsloth:
+        # build BOFTConfig from model args
+        target_modules = (
+            args.boft_target_modules.split(",")
+            if args.boft_target_modules and args.boft_target_modules != "all-linear"
+            else args.boft_target_modules
+        )
+        layers_to_transform = None
+        if args.boft_layers_to_transform:
+            try:
+                layers_to_transform = [int(x) for x in args.boft_layers_to_transform.split(",")]
+            except Exception:
+                layers_to_transform = args.boft_layers_to_transform
+
+        modules_to_save = None
+        if args.boft_modules_to_save:
+            modules_to_save = args.boft_modules_to_save.split(",")
+
+        peft_config = BOFTConfig(
+            target_modules=target_modules,
+            boft_block_size=args.boft_block_size,
+            boft_block_num=args.boft_block_num,
+            boft_n_butterfly_factor=args.boft_n_butterfly_factor,
+            boft_dropout=args.boft_dropout,
+            fan_in_fan_out=args.boft_fan_in_fan_out,
+            bias=args.boft_bias,
+            init_weights=args.boft_init_weights,
+            layers_to_transform=layers_to_transform,
+            layers_pattern=args.boft_layers_pattern,
+            modules_to_save=modules_to_save,
+            inference_mode=False,
+        )
+    elif args.use_peft_ia3 and not args.use_unsloth:
+        # build IA3Config from model args
+        target_modules = (
+            args.ia3_target_modules.split(",")
+            if args.ia3_target_modules and args.ia3_target_modules != "all-linear"
+            else args.ia3_target_modules
+        )
+        feedforward_modules = None
+        if args.ia3_feedforward_modules:
+            feedforward_modules = args.ia3_feedforward_modules.split(",")
+
+        modules_to_save = None
+        if args.ia3_modules_to_save:
+            modules_to_save = args.ia3_modules_to_save.split(",")
+
+        peft_config = IA3Config(
+            target_modules=target_modules,
+            feedforward_modules=feedforward_modules,
+            fan_in_fan_out=args.ia3_fan_in_fan_out,
+            modules_to_save=modules_to_save,
+            init_ia3_weights=args.ia3_init_weights,
             inference_mode=False,
         )
 
