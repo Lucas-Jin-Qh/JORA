@@ -1,0 +1,21 @@
+{
+  "peft_type": "JORA",
+  "selection": "topk_ema",
+  "ema_beta": 0.95,
+  "update_interval": 50,
+  "magnitude": "oer_softmax",
+  "oer_temperature": 2.0,
+  "rotation_param": "cayley",
+  "lr_theta": 0.05,
+  "lr_core": 0.01,
+  "inference_mode": false,
+  "ddp_allow_unused_parameters": true,
+  "name": "diag-S64-k16",
+  "core": "diag",
+  "S_L": 64,
+  "S_R": 64,
+  "k": 16,
+  "coverage_rate": "1.57%",
+  "expected_params": "~57K",
+  "notes": "Diag \u66f4\u5c0f\u914d\u7f6e"
+}

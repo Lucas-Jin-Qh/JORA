@@ -1,0 +1,22 @@
+{
+  "peft_type": "JORA",
+  "core": "block",
+  "S_L": 96,
+  "S_R": 96,
+  "k": 24,
+  "selection": "topk_ema",
+  "ema_beta": 0.95,
+  "update_interval": 50,
+  "magnitude": "oer_softmax",
+  "oer_temperature": 2.0,
+  "rotation_param": "cayley",
+  "lr_theta": 0.05,
+  "lr_core": 0.01,
+  "inference_mode": false,
+  "ddp_allow_unused_parameters": true,
+  "name": "block_size-4",
+  "block_size": 4,
+  "coverage_rate": "0.10%",
+  "expected_params": "~115K",
+  "notes": "\u4e2d\u7b49 block\uff0c\u9ed8\u8ba4\u63a8\u8350"
+}

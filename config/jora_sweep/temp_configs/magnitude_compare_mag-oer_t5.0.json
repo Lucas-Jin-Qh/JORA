@@ -1,0 +1,21 @@
+{
+  "peft_type": "JORA",
+  "core": "block",
+  "block_size": 4,
+  "S_L": 96,
+  "S_R": 96,
+  "k": 24,
+  "selection": "topk_ema",
+  "ema_beta": 0.95,
+  "update_interval": 50,
+  "rotation_param": "cayley",
+  "lr_theta": 0.05,
+  "lr_core": 0.01,
+  "inference_mode": false,
+  "ddp_allow_unused_parameters": true,
+  "name": "mag-oer_t5.0",
+  "magnitude": "oer_softmax",
+  "oer_temperature": 5.0,
+  "expected_params": "~115K",
+  "notes": "OER \u8d85\u9ad8\u6e29\uff0c\u7ade\u4e89\u5e73\u7f13"
+}

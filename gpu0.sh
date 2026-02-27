@@ -2,8 +2,9 @@
 
 # =============================================================================
 # JORA 超参数扫描实验脚本 - GPU0
-# 运行 jora_sweep 目录下所有配置
-# 支持单配置和多实验（experiments数组）两种格式
+# 仅运行 JORA Sweep 中未完成的 38 个实验
+# 已完成: 73 个实验
+# 待运行: 38 个实验 (10 + 3 + 3 + 7 + 6 + 2 + 1 + 1 + 1 + 4)
 # =============================================================================
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -23,7 +24,113 @@ num_epochs=3
 batch_size=4
 gradient_accumulation_steps=8
 
-# JORA Sweep 配置文件列表
+# 已完成的实验 (跳过)
+declare -A completed_experiments
+# block_s_k_sweep (10 个已完成)
+completed_experiments["block_s_k_sweep/block-S128-k24"]=1
+completed_experiments["block_s_k_sweep/block-S128-k32"]=1
+completed_experiments["block_s_k_sweep/block-S32-k16"]=1
+completed_experiments["block_s_k_sweep/block-S32-k8"]=1
+completed_experiments["block_s_k_sweep/block-S64-k16"]=1
+completed_experiments["block_s_k_sweep/block-S64-k24"]=1
+completed_experiments["block_s_k_sweep/block-S64-k8"]=1
+completed_experiments["block_s_k_sweep/block-S96-k16"]=1
+completed_experiments["block_s_k_sweep/block-S96-k24"]=1
+completed_experiments["block_s_k_sweep/block-S96-k32"]=1
+# block_size_sweep (已完成 0 个)
+# diag_baseline (已完成 0 个)
+# selection_refine (已完成 0 个)
+# magnitude_compare (已完成 0 个)
+# rotation_compare (已完成 0 个)
+# ablation_study (已完成 8 个)
+completed_experiments["ablation_study/abl-core-diag"]=1
+completed_experiments["ablation_study/abl-core-lowrank"]=1
+completed_experiments["ablation_study/abl-mag-ecd"]=1
+completed_experiments["ablation_study/abl-no_mag"]=1
+completed_experiments["ablation_study/abl-no_rotation"]=1
+completed_experiments["ablation_study/abl-no_selection"]=1
+completed_experiments["ablation_study/abl-random_sel"]=1
+completed_experiments["ablation_study/abl-single_left"]=1
+# lowrank_explore (已完成 3 个)
+completed_experiments["lowrank_explore/lowrank-r16"]=1
+completed_experiments["lowrank_explore/lowrank-r4"]=1
+completed_experiments["lowrank_explore/lowrank-r8-S64"]=1
+# asymmetric_scan (已完成 6 个)
+completed_experiments["asymmetric_scan/asym-S32-S64"]=1
+completed_experiments["asymmetric_scan/asym-S48-S96"]=1
+completed_experiments["asymmetric_scan/asym-S64-S32"]=1
+completed_experiments["asymmetric_scan/asym-S64-S64-k16"]=1
+completed_experiments["asymmetric_scan/asym-S64-S64-k8"]=1
+completed_experiments["asymmetric_scan/asym-S96-S48"]=1
+# pairing_strategy_scan (已完成 3 个)
+completed_experiments["pairing_strategy_scan/pair-consecutive"]=1
+completed_experiments["pairing_strategy_scan/pair-consecutive-S64"]=1
+completed_experiments["pairing_strategy_scan/pair-high_low"]=1
+# learning_rate_scan (已完成 8 个)
+completed_experiments["learning_rate_scan/lr-0.00-0.01"]=1
+completed_experiments["learning_rate_scan/lr-0.01-0.01"]=1
+completed_experiments["learning_rate_scan/lr-0.02-0.01"]=1
+completed_experiments["learning_rate_scan/lr-0.05-0.005"]=1
+completed_experiments["learning_rate_scan/lr-0.05-0.01"]=1
+completed_experiments["learning_rate_scan/lr-0.05-0.02"]=1
+completed_experiments["learning_rate_scan/lr-0.10-0.01"]=1
+completed_experiments["learning_rate_scan/lr-0.10-0.02"]=1
+# fine_block_size_scan (已完成 5 个)
+completed_experiments["fine_block_size_scan/block_size-1"]=1
+completed_experiments["fine_block_size_scan/block_size-12"]=1
+completed_experiments["fine_block_size_scan/block_size-3"]=1
+completed_experiments["fine_block_size_scan/block_size-5"]=1
+completed_experiments["fine_block_size_scan/block_size-6"]=1
+# all_linear_track (已完成 0 个)
+# temperature_annealing (已完成 6 个)
+completed_experiments["temperature_annealing/temp-anneal-t10-1"]=1
+completed_experiments["temperature_annealing/temp-anneal-t3-0.5"]=1
+completed_experiments["temperature_annealing/temp-anneal-t5-1"]=1
+completed_experiments["temperature_annealing/temp-fixed1.0"]=1
+completed_experiments["temperature_annealing/temp-fixed-t5.0"]=1
+completed_experiments["temperature_annealing/temp-no_anneal-t2.0"]=1
+# ema_grid_scan (已完成 10 个)
+completed_experiments["ema_grid_scan/ema-b0.90-u1"]=1
+completed_experiments["ema_grid_scan/ema-b0.90-u16"]=1
+completed_experiments["ema_grid_scan/ema-b0.90-u50"]=1
+completed_experiments["ema_grid_scan/ema-b0.95-u1"]=1
+completed_experiments["ema_grid_scan/ema-b0.95-u16"]=1
+completed_experiments["ema_grid_scan/ema-b0.95-u50"]=1
+completed_experiments["ema_grid_scan/ema-b0.98-u1"]=1
+completed_experiments["ema_grid_scan/ema-b0.98-u100"]=1
+completed_experiments["ema_grid_scan/ema-b0.98-u16"]=1
+completed_experiments["ema_grid_scan/ema-b0.98-u50"]=1
+# dataset_comparison (已完成 5 个)
+completed_experiments["dataset_comparison/dataset-alpaca"]=1
+completed_experiments["dataset_comparison/dataset-alpaca_cleaned"]=1
+completed_experiments["dataset_comparison/dataset-gsm8k_main"]=1
+completed_experiments["dataset_comparison/dataset-open_orca"]=1
+completed_experiments["dataset_comparison/dataset-slimorca"]=1
+# model_comparison (已完成 4 个)
+completed_experiments["model_comparison/model-llama2-7b"]=1
+completed_experiments["model_comparison/model-mistral-7b"]=1
+completed_experiments["model_comparison/model-mistral-instruct"]=1
+completed_experiments["model_comparison/model-qwen2-7b"]=1
+# batch_lr_interaction (已完成 6 个)
+completed_experiments["batch_lr_interaction/bs2-lr3e-4"]=1
+completed_experiments["batch_lr_interaction/bs4-lr1e-4"]=1
+completed_experiments["batch_lr_interaction/bs4-lr2e-4"]=1
+completed_experiments["batch_lr_interaction/bs4-lr3e-4"]=1
+completed_experiments["batch_lr_interaction/bs8-lr1e-4"]=1
+completed_experiments["batch_lr_interaction/bs8-lr2e-4"]=1
+# advanced_ablation (已完成 8 个)
+completed_experiments["advanced_ablation/group-by-type"]=1
+completed_experiments["advanced_ablation/group-size1"]=1
+completed_experiments["advanced_ablation/group-size2"]=1
+completed_experiments["advanced_ablation/group-size4"]=1
+completed_experiments["advanced_ablation/gumbel-disable"]=1
+completed_experiments["advanced_ablation/gumbel-enable-tau0.5"]=1
+completed_experiments["advanced_ablation/gumbel-enable-tau1.0"]=1
+completed_experiments["advanced_ablation/gumbel-enable-tau2.0"]=1
+# main_config (已完成)
+completed_experiments["main_config/main_config"]=1
+
+# JORA Sweep 配置文件列表 (20 个配置，111 个实验)
 sweep_configs=(
     "main_config.json"
     "block_s_k_sweep.json"
@@ -75,8 +182,9 @@ echo "========================================"
 echo "JORA Hyperparameter Sweep (GPU0)"
 echo "========================================"
 echo ""
+echo "已完成的实验: 73 个"
+echo "待运行的实验: 38 个"
 echo "配置目录: ${sweep_config_dir}"
-echo "总配置数: ${#sweep_configs[@]}"
 echo "Seeds: 42"
 echo "Models: mistral_7b (主), llama2_7b (辅)"
 echo "Datasets: alpaca (主), gsm8k (辅)"
@@ -95,44 +203,11 @@ mkdir -p "${output_base_dir}"
 
 # 清理临时配置文件
 rm -rf "${temp_config_dir}"/*
-echo "临时配置目录: ${temp_config_dir}"
 
 # 统计变量
-total_configs=${#sweep_configs[@]}
-current_config=0
 success_count=0
 fail_count=0
 skipped_count=0
-
-# 函数：检测配置文件格式并生成实验列表
-generate_experiments() {
-    local config_path="$1"
-    local config_file="$2"
-
-    # 使用 Python 检测配置格式
-    python3 -c "
-import json
-import sys
-
-with open('$config_path', 'r') as f:
-    config = json.load(f)
-
-# 检查是否是单配置格式（有 'peft_type' 直接在顶层）
-if 'peft_type' in config:
-    print(f'SINGLE:{config.get(\"name\", \"$config_file\")}')
-else:
-    # 多实验格式 - 有 experiments 数组
-    experiments = config.get('experiments', [])
-    fixed_params = config.get('fixed_params', {})
-    for i, exp in enumerate(experiments):
-        merged = {**fixed_params, **exp}
-        name = exp.get('name', f'exp{i}')
-        print(f'MULTI:{name}', end='')
-        if i < len(experiments) - 1:
-            print()
-    print()
-"
-}
 
 # 函数：合并配置并生成临时文件
 merge_and_create_temp_config() {
@@ -170,22 +245,17 @@ else:
 # 输出合并后的配置
 with open('$temp_file', 'w') as f:
     json.dump(merged, f, indent=2)
-
-print(f'Created temp config: $temp_file')
 "
 }
 
 # 遍历所有 JORA Sweep 配置
 for config_file in "${sweep_configs[@]}"; do
-    current_config=$((current_config + 1))
-
     config_path="${sweep_config_dir}/${config_file}"
 
     # 检查配置文件是否存在
     if [ ! -f "${config_path}" ]; then
         echo ""
-        echo "⚠️  [${current_config}/${total_configs}] 配置文件不存在，跳过: ${config_path}"
-        skipped_count=$((skipped_count + 1))
+        echo "⚠️  配置文件不存在，跳过: ${config_path}"
         continue
     fi
 
@@ -193,7 +263,7 @@ for config_file in "${sweep_configs[@]}"; do
 
     echo ""
     echo "========================================"
-    echo "[${current_config}/${total_configs}] 配置: ${config_file}"
+    echo "配置: ${config_file}"
     echo "========================================"
 
     # 检测配置格式并获取实验列表
@@ -205,25 +275,31 @@ print('SINGLE' if 'peft_type' in config else 'MULTI')
 " 2>/dev/null)
 
     if [ "$config_format" = "SINGLE" ]; then
-        # 单配置格式 - 直接使用
         experiments=("$config_name")
         echo "📄 格式: 单配置"
     else
-        # 多实验格式 - 获取实验列表
         echo "📄 格式: 多实验 (experiments数组)"
-        experiments=($(python3 -c "
+        IFS=$'\n' read -r -d '' -a experiments < <(python3 -c "
 import json
 with open('${config_path}', 'r') as f:
     config = json.load(f)
 for exp in config.get('experiments', []):
     print(exp.get('name', 'unknown'))
-" 2>/dev/null))
+" 2>/dev/null && printf '\0')
     fi
 
     echo "🔬 实验数: ${#experiments[@]}"
 
     # 遍历每个实验
     for exp_name in "${experiments[@]}"; do
+        # 检查是否已完成
+        exp_key="${config_name}/${exp_name}"
+        if [ -n "${completed_experiments[$exp_key]}" ]; then
+            echo "⏭️  已完成，跳过: ${exp_name}"
+            skipped_count=$((skipped_count + 1))
+            continue
+        fi
+
         # 为每个实验创建临时配置文件
         temp_config_file="${temp_config_dir}/${config_name}_${exp_name}.json"
 
@@ -234,7 +310,9 @@ for exp in config.get('experiments', []):
             actual_config="$config_path"
         fi
 
-        # 遍历两个模型
+        echo "🔄 运行: ${exp_name} ..."
+
+        # 遍历两个模型 (mistral 优先)
         for model_key in "mistral_7b" "llama2_7b"; do
             model_path="${model_paths[$model_key]}"
 
@@ -247,41 +325,34 @@ for exp in config.get('experiments', []):
             for dataset_key in "alpaca" "gsm8k"; do
                 dataset_name="${dataset_names[${model_key}_${dataset_key}]}"
 
-                echo ""
-                echo "----------------------------------------"
-                echo "🔧 实验: ${exp_name} | 模型: ${model_key} | 数据集: ${dataset_key}"
-                echo "----------------------------------------"
-
-    # 遍历所有 seed
-    for seed in "${seeds[@]}"; do
-        echo ""
+                # 遍历所有 seed
+                for seed in "${seeds[@]}"; do
+                    echo ""
                     echo "🚀 运行: ${config_name}/${exp_name} | ${model_key} | ${dataset_key} | seed=${seed} ..."
 
                     output_dir="${output_base_dir}/${config_name}/${exp_name}/${model_key}/${dataset_key}/seed${seed}"
                     mkdir -p "${output_dir}"
 
-        python train_with_config.py \
-            --model_path "${model_path}" \
-            --dataset_name "${dataset_name}" \
+                    python train_with_config.py \
+                        --model_path "${model_path}" \
+                        --dataset_name "${dataset_name}" \
                         --config "${actual_config}" \
-            --output_dir "${output_dir}" \
-            --num_epochs ${num_epochs} \
-            --batch_size ${batch_size} \
-            --gradient_accumulation_steps ${gradient_accumulation_steps} \
-            --learning_rate ${learning_rate} \
+                        --output_dir "${output_dir}" \
+                        --num_epochs ${num_epochs} \
+                        --batch_size ${batch_size} \
+                        --gradient_accumulation_steps ${gradient_accumulation_steps} \
+                        --learning_rate ${learning_rate} \
                         --seed ${seed} \
                         --execute
 
-        if [ $? -ne 0 ]; then
+                    if [ $? -ne 0 ]; then
                         echo "❌ 实验失败: ${config_name}/${exp_name} | ${model_key} | ${dataset_key} | seed=${seed}"
-            fail_count=$((fail_count + 1))
-                        echo "跳过此实验，继续下一个..."
-                        continue 2  # 跳出 seed 和当前 experiment 循环
-        fi
+                        fail_count=$((fail_count + 1))
+                        continue 2
+                    fi
 
-                    echo "✅ 实验完成: ${config_name}/${exp_name} | ${model_key} | ${dataset_key} | seed=${seed}"
+                    echo "✅ 实验完成"
                     success_count=$((success_count + 1))
-        echo "----------------------------------------"
 
                     # 清理显存
                     sleep 2
@@ -290,7 +361,6 @@ for exp in config.get('experiments', []):
             done
         done
 
-        echo ""
         echo "✅ 实验 ${exp_name} 完成"
     done
 
@@ -298,43 +368,16 @@ for exp in config.get('experiments', []):
     echo "✅ 配置 ${config_name} 所有实验完成"
 done
 
-echo ""
-echo "========================================"
-echo "🎉 GPU0 所有 JORA Sweep 实验完成!"
-echo ""
-echo "实验统计:"
-echo "  - 总配置数: ${total_configs}"
-echo "  - 成功实验: ${success_count}"
-echo "  - 失败实验: ${fail_count}"
-echo "  - 跳过配置: ${skipped_count}"
-echo ""
-echo "输出目录: ${output_base_dir}"
-echo "========================================"
-
 # 清理临时配置文件
 rm -rf "${temp_config_dir}"
-echo ""
-echo "🧹 临时配置文件已清理"
-
-# 生成结果汇总 CSV
-echo ""
-echo "📋 生成结果汇总..."
-
-summary_file="${output_base_dir}/sweep_summary.csv"
-echo "experiment_name,config_file,model,dataset,seed,status,trainable_params" > "${summary_file}"
-
-find "${output_base_dir}" -name "train.log" -type f 2>/dev/null | while read log_file; do
-    dir_path=$(dirname "${log_file}")
-    seed=$(basename "${dir_path}")
-    dataset=$(basename "$(dirname "${dir_path}")")
-    model=$(basename "$(dirname "$(dirname "${dir_path}")")")
-    exp_name=$(basename "$(dirname "$(dirname "$(dirname "${dir_path}")")")")
-    config=$(basename "$(dirname "$(dirname "$(dirname "$(dirname "${dir_path}")")")")")
-    trainable_params=$(grep -oP "trainable params: \K[0-9,]+" "${log_file}" 2>/dev/null | tr -d ',' || echo "N/A")
-    echo "${config}_${exp_name}_${model}_${dataset}_${seed},${config},${exp_name},${model},${dataset},${seed},completed,${trainable_params}" >> "${summary_file}"
-done
 
 echo ""
-echo "📊 结果汇总已保存至: ${summary_file}"
+echo "========================================"
+echo "🎉 GPU0 JORA Sweep 实验完成!"
 echo ""
-echo "总计完成实验数: ${success_count}"
+echo "实验统计:"
+echo "  - 成功实验: ${success_count}"
+echo "  - 失败实验: ${fail_count}"
+echo "  - 跳过(已完成): ${skipped_count}"
+echo "  - 输出目录: ${output_base_dir}"
+echo "========================================"

@@ -1,0 +1,20 @@
+{
+  "peft_type": "JORA",
+  "core": "block",
+  "block_size": 4,
+  "S_L": 96,
+  "S_R": 96,
+  "k": 24,
+  "magnitude": "oer_softmax",
+  "oer_temperature": 2.0,
+  "rotation_param": "cayley",
+  "lr_theta": 0.05,
+  "lr_core": 0.01,
+  "inference_mode": false,
+  "ddp_allow_unused_parameters": true,
+  "name": "sel-topk_ema-b0.95-u50",
+  "selection": "topk_ema",
+  "ema_beta": 0.95,
+  "update_interval": 50,
+  "notes": "\u4e2d\u7b49 EMA\uff0c\u9ed8\u8ba4\u63a8\u8350"
+}

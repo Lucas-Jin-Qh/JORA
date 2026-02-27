@@ -1,0 +1,18 @@
+{
+  "peft_type": "JORA",
+  "core": "block",
+  "block_size": 4,
+  "S_L": 96,
+  "S_R": 96,
+  "k": 24,
+  "magnitude": "oer_softmax",
+  "oer_temperature": 2.0,
+  "rotation_param": "cayley",
+  "lr_theta": 0.05,
+  "lr_core": 0.01,
+  "inference_mode": false,
+  "ddp_allow_unused_parameters": true,
+  "name": "sel-random",
+  "selection": "random",
+  "notes": "\u968f\u673a\u9009\u62e9\u57fa\u7ebf\uff0c\u9a8c\u8bc1 topk \u6709\u6548\u6027"
+}

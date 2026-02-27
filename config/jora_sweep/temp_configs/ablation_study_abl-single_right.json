@@ -1,0 +1,25 @@
+{
+  "peft_type": "JORA",
+  "target_modules": [
+    "q_proj",
+    "v_proj"
+  ],
+  "core": "block",
+  "block_size": 4,
+  "S_L": 96,
+  "S_R": 96,
+  "k": 24,
+  "rotation_param": "cayley",
+  "selection": "topk_ema",
+  "ema_beta": 0.95,
+  "update_interval": 50,
+  "magnitude": "oer_softmax",
+  "oer_temperature": 2.0,
+  "lr_theta": 0.05,
+  "lr_core": 0.01,
+  "inference_mode": false,
+  "ddp_allow_unused_parameters": true,
+  "name": "abl-single_right",
+  "single_sided": "right",
+  "notes": "\u5355\u4fa7\u65cb\u8f6c\uff08\u53f3\uff09\uff0c\u9a8c\u8bc1\u5bf9\u79f0\u6027\u8bbe\u8ba1"
+}

@@ -2,6 +2,7 @@
 """
 使用PEFT配置文件进行训练的包装脚本
 从config目录读取PEFT配置文件，自动生成训练命令
+支持多GPU分布式训练
 """
 
 import json
@@ -106,9 +107,11 @@ def create_training_command(
     eval_steps: int = None,
     eval_strategy: str = "no",
     torch_dtype: str = "auto",
-    gradient_accumulation_steps: int = 8
+    gradient_accumulation_steps: int = 8,
+    num_gpus: int = 1,
+    deepspeed_config: str = None
 ) -> str:
-    """从PEFT配置文件生成训练命令"""
+    """从PEFT配置文件生成训练命令，支持多GPU分布式训练"""
 
     # 加载PEFT配置
     peft_config = load_peft_config(peft_config_path)
@@ -119,8 +122,22 @@ def create_training_command(
         torch_dtype = "bfloat16"  # JORA uses flash attention, needs efficient dtype
 
     # 构建基础命令
-    cmd_parts = [
-        "python examples/sft/train.py",
+    # 根据 GPU 数量选择启动方式
+    if num_gpus > 1:
+        # 使用 torchrun 进行多 GPU 分布式训练
+        cmd_parts = [
+            f"torchrun --nproc_per_node={num_gpus} examples/sft/train.py",
+        ]
+    else:
+        cmd_parts = [
+            "python examples/sft/train.py",
+        ]
+
+    # 添加 DeepSpeed 配置（如果指定）
+    if deepspeed_config:
+        cmd_parts.append(f"--deepspeed {deepspeed_config}")
+
+    cmd_parts.extend([
         f"--seed {seed}",
         f"--model_name_or_path {model_path}",
         f"--dataset_name {dataset_name}",
@@ -136,7 +153,7 @@ def create_training_command(
         f"--eval_strategy {eval_strategy}",
         "--save_strategy epoch",  # 每epoch保存一次checkpoint
         "--save_total_limit 3"    # 只保留最新的3个checkpoint
-    ]
+    ])
 
     # 添加评估步骤（如果启用）
     if eval_strategy != "no" and eval_steps is not None:
@@ -359,6 +376,8 @@ def main():
     parser.add_argument("--torch_dtype", type=str, default="auto", help="模型精度(auto/float16/bfloat16/float32)")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="梯度累积步数")
+    parser.add_argument("--num_gpus", type=int, default=1, help="使用的GPU数量 (默认: 1, >1 使用分布式训练)")
+    parser.add_argument("--deepspeed", type=str, default=None, help="DeepSpeed配置文件路径")
     parser.add_argument("--execute", action="store_true", help="直接执行命令")
 
     args = parser.parse_args()
@@ -376,6 +395,8 @@ def main():
         max_length=args.max_length,
         seed=args.seed,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        num_gpus=args.num_gpus,
+        deepspeed_config=args.deepspeed,
         use_4bit=args.use_4bit,
         use_nested_quant=args.use_nested_quant,
         push_to_hub=args.push_to_hub,
@@ -416,6 +437,14 @@ def main():
     print(f"基础模型参数量: {param_info['base_params']:,}")
     print(f"可训练参数量: ~{param_info['trainable_params']:,}")
     print(f"可训练参数比例: {param_info['trainable_ratio']:.3f}%")
+
+    # 显示分布式训练信息
+    if args.num_gpus > 1:
+        print(f"\n=== 分布式训练配置 ===")
+        print(f"GPU数量: {args.num_gpus}")
+        print(f"启动方式: torchrun --nproc_per_node={args.num_gpus}")
+        if args.deepspeed:
+            print(f"DeepSpeed配置: {args.deepspeed}")
 
     if args.execute:
         print("\n=== 开始执行训练 ===")

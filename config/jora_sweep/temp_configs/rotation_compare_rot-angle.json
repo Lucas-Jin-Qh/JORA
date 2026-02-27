@@ -1,0 +1,20 @@
+{
+  "peft_type": "JORA",
+  "core": "block",
+  "block_size": 4,
+  "S_L": 96,
+  "S_R": 96,
+  "k": 24,
+  "selection": "topk_ema",
+  "ema_beta": 0.95,
+  "update_interval": 50,
+  "magnitude": "oer_softmax",
+  "oer_temperature": 2.0,
+  "lr_theta": 0.05,
+  "lr_core": 0.01,
+  "inference_mode": false,
+  "ddp_allow_unused_parameters": true,
+  "name": "rot-angle",
+  "rotation_param": "angle",
+  "notes": "\u89d2\u5ea6\u53c2\u6570\u5316\uff0c\u5b9e\u73b0\u7b80\u5355"
+}
