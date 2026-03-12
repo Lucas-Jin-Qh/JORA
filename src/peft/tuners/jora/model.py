@@ -22,7 +22,12 @@ warnings.filterwarnings(
 )
 
 class JoraModel(BaseTuner):
-    """PEFT BaseTuner implementation for JORA."""
+    """PEFT BaseTuner implementation for JORA.
+
+    Important: Pair selection updates require JoraTrainerCallback (recommended) or
+    manual calls to jora_model.jora_update_step() after each optimizer step.
+    The deprecated _jora_post_backward_hook method is no longer used.
+    """
 
     prefix = "jora_"
     tuner_layer_cls = JoraLayer
@@ -56,7 +61,6 @@ class JoraModel(BaseTuner):
         except Exception:
             # best-effort; if model missing, leave delegation to the fallback method
             pass
-
 
     def set_total_steps(self, total_steps: int):
         """Optionally tell JORA the planned number of training steps.
@@ -138,42 +142,23 @@ class JoraModel(BaseTuner):
             return [[layer] for layer in self._jora_layers]
 
     def _jora_post_backward_hook(self, module: nn.Module, grad_input, grad_output):
-        # Trigger only during training.
-        if not module.training:
-            return
+        """DEPRECATED: This method is no longer used for pair selection updates.
 
-        self._jora_global_step += 1  # per backward call (micro-batch), not per optimizer step
-        total_steps = self._jora_total_steps
+        Pair selection is now driven by JoraTrainerCallback (recommended) or manual
+        calls to jora_update_step(). This backward hook is kept for reference only
+        and will be removed in a future version.
 
-        # Get config parameters (assume all layers use same config)
-        if not self._jora_layers:
-            return
-
-        cfg = None
-        first_layer = self._jora_layers[0]
-        if hasattr(first_layer, 'adapters') and first_layer.adapters:
-            adapter_name = list(first_layer.adapters.keys())[0]
-            cfg = first_layer.adapters[adapter_name].cfg
-        update_interval = int(getattr(cfg, 'update_interval', 1))
-
-        # Update only when needed (dramatically reduce call frequency)
-        if update_interval <= 1 or (self._jora_global_step % update_interval) == 0:
-            # Ensure groups are created
-            self._group_layers_for_selection()
-
-            # Batch temperature update (if needed)
-            if total_steps is not None and total_steps > 0:
-                for m in self._jora_layers:
-                    m.update_temperature(self._jora_global_step, total_steps)
-
-            # Pair selection update - use grouped selection for performance
-            for group in self._selection_groups:
-                if len(group) == 1:
-                    # Single layer - use original per-module selection
-                    group[0].update_step(current_step=self._jora_global_step, total_steps=total_steps)
-                else:
-                    # Multiple layers - use shared selection for the group
-                    self._update_group_selection_shared(group, self._jora_global_step, total_steps)
+        The original backward hook approach failed because PyTorch hooks don't trigger
+        on ModelOutput objects, which are commonly used in transformer models.
+        """
+        warnings.warn(
+            "_jora_post_backward_hook is deprecated and not used for updates. "
+            "Use JoraTrainerCallback or manually call jora_update_step() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # Return immediately - do not execute old logic
+        return
 
     def _update_group_selection_shared(self, group, current_step: int, total_steps: int | None):
         """Update selection for a group of layers using shared computation.

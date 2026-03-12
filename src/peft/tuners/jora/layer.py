@@ -88,29 +88,31 @@ class _JoraAdapterState(nn.Module):
         mag = getattr(cfg, "magnitude", "none")
         if mag != "none":
             with torch.no_grad():
-                # For magnitude scaling, we need norms along the output dimension
-                # This ensures base_row_norms has exactly self.n elements
-                if base_layer.weight.dim() == 2:
-                    # For 2D weights [out_features, in_features], norm along dim=0 gives output norms
+                # For magnitude scaling, we need norms along the OUTPUT dimension.
+                # - nn.Linear: weight shape [out_features, in_features], use dim=1 (each row = one output)
+                # - HF Conv1D: weight shape [in_features, out_features], use dim=0 (each column = one output)
+                # We use the same logic as utils.py to determine the correct dimension.
+                from .utils import is_conv1d_layer
+                if is_conv1d_layer(base_layer):
+                    # Conv1D: weight [in, out], output is along dim=0 (columns)
                     base_row_norms = torch.norm(base_layer.weight, p=2, dim=0)
+                elif isinstance(base_layer, nn.Linear):
+                    # Linear: weight [out, in], output is along dim=1 (rows)
+                    base_row_norms = torch.norm(base_layer.weight, p=2, dim=1)
                 else:
-                    # Fallback: assume first dimension is output
+                    # Fallback for other layer types
                     base_row_norms = torch.norm(base_layer.weight, p=2, dim=0)
 
-                # Ensure we have exactly self.n elements (output dimension)
+                # Ensure we have exactly self.n elements (output dimension = out_features)
                 if base_row_norms.size(0) != self.n:
-                    # If size mismatch, try the other dimension
-                    if base_layer.weight.dim() == 2:
-                        base_row_norms = torch.norm(base_layer.weight, p=2, dim=1)
                     # If still not matching, resize to self.n
-                    if base_row_norms.size(0) != self.n:
-                        if base_row_norms.size(0) > self.n:
-                            base_row_norms = base_row_norms[:self.n]
-                        else:
-                            # Pad if necessary
-                            padding_size = self.n - base_row_norms.size(0)
-                            padding = torch.ones(padding_size, device=base_row_norms.device, dtype=base_row_norms.dtype)
-                            base_row_norms = torch.cat([base_row_norms, padding])
+                    if base_row_norms.size(0) > self.n:
+                        base_row_norms = base_row_norms[:self.n]
+                    else:
+                        # Pad if necessary
+                        padding_size = self.n - base_row_norms.size(0)
+                        padding = torch.ones(padding_size, device=base_row_norms.device, dtype=base_row_norms.dtype)
+                        base_row_norms = torch.cat([base_row_norms, padding])
 
                 total_energy = (base_row_norms.float() ** 2).sum()
             self.register_buffer("base_row_norms", base_row_norms, persistent=True)
@@ -833,17 +835,37 @@ class JoraLayer(nn.Module, BaseTunerLayer):
         """
         base_layer = self.get_base_layer()
 
-        # Get base weight norms for scaling calculation
-        if base_layer.weight.dim() == 2:
-            base_row_norms = torch.norm(base_layer.weight, p=2, dim=1)  # along input dim
-        else:
-            base_row_norms = torch.norm(base_layer.weight, p=2, dim=-1)
-
-        # Reuse previously computed metadata if available (for unmerge)
+        # Get cached base weight norms and total energy from adapter_state
+        # This ensures consistency with what was computed during initialization
         if reuse_metadata is not None:
+            # For unmerge: use the metadata saved during merge
             scale = reuse_metadata['scale']
             base_row_norms = reuse_metadata['base_row_norms']
         else:
+            # For merge: use the cached values from adapter initialization
+            # This ensures consistency: total_energy = sum(norm^2), not (sum(norm))^2
+            if hasattr(adapter_state, 'base_row_norms') and adapter_state.base_row_norms is not None:
+                base_row_norms = adapter_state.base_row_norms
+            else:
+                # Fallback: compute norms (shouldn't happen in normal use)
+                base_layer = self.get_base_layer()
+                from .utils import is_conv1d_layer
+                if is_conv1d_layer(base_layer):
+                    # Conv1D: weight [in, out], output is along dim=0 (columns)
+                    base_row_norms = torch.norm(base_layer.weight, p=2, dim=0)
+                elif isinstance(base_layer, nn.Linear):
+                    # Linear: weight [out, in], output is along dim=1 (rows)
+                    base_row_norms = torch.norm(base_layer.weight, p=2, dim=1)
+                else:
+                    # Fallback for other layer types
+                    base_row_norms = torch.norm(base_layer.weight, p=2, dim=0)
+
+            if hasattr(adapter_state, 'total_energy') and adapter_state.total_energy is not None:
+                total_energy = adapter_state.total_energy
+            else:
+                # Fallback: compute total energy (shouldn't happen in normal use)
+                total_energy = (base_row_norms.float() ** 2).sum()
+
             # Compute magnitude scale and store metadata
             from .magnitude import compute_ecd_scale, compute_oer_scale_softmax
 
@@ -851,7 +873,7 @@ class JoraLayer(nn.Module, BaseTunerLayer):
             if mag == "ecd_tanh":
                 scale = compute_ecd_scale(
                     base_row_norms=base_row_norms,
-                    total_energy=base_row_norms.sum().square(),
+                    total_energy=total_energy,
                     ecd_log_mag=adapter_state.ecd_log_mag,
                     ecd_alpha=adapter_state.cfg.ecd_alpha,
                     temperature=adapter_state.cfg.ecd_temperature,
@@ -860,17 +882,14 @@ class JoraLayer(nn.Module, BaseTunerLayer):
             elif mag == "oer_softmax":
                 scale = compute_oer_scale_softmax(
                     base_row_norms=base_row_norms,
-                    total_energy=base_row_norms.sum().square(),
+                    total_energy=total_energy,
                     oer_logits=adapter_state.ecd_log_mag,
                     temperature=adapter_state.cfg.oer_temperature,
                     eps=adapter_state.cfg.eps,
                 ).to(delta_weight.dtype)
             else:
                 # No magnitude scaling
-                if reuse_metadata is not None:
-                    return delta_weight, None
-                else:
-                    return delta_weight
+                return delta_weight, None
 
         # Apply scaling (broadcast to match weight dimensions)
         # scale shape: [n_out], delta_weight shape: [n_out, n_in]

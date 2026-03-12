@@ -83,6 +83,66 @@ class ModelArguments:
         default="dimension",
         metadata={"help": "Grouping strategy for JORA selection ('dimension', 'type', 'none')."},
     )
+    # P0 JORA core parameters
+    jora_core: Optional[str] = field(
+        default="diag",
+        metadata={"help": "JORA core type ('diag', 'block', 'lowrank')."},
+    )
+    jora_block_size: Optional[int] = field(
+        default=4,
+        metadata={"help": "Block size for JORA 'block' core."},
+    )
+    jora_lowrank_r: Optional[int] = field(
+        default=8,
+        metadata={"help": "Rank for JORA 'lowrank' core."},
+    )
+    jora_lowrank_alpha: Optional[float] = field(
+        default=None,
+        metadata={"help": "Alpha for JORA 'lowrank' core."},
+    )
+    jora_zero_init_core: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Zero-initialize JORA core parameters."},
+    )
+    # P0 JORA OER parameters
+    jora_oer_temperature: Optional[float] = field(
+        default=1.0,
+        metadata={"help": "Temperature for OER softmax magnitude."},
+    )
+    # P0 JORA schedule parameters
+    jora_warmup_steps: Optional[int] = field(
+        default=0,
+        metadata={"help": "Warmup steps for JORA pair selection."},
+    )
+    jora_warmup_ratio: Optional[float] = field(
+        default=0.0,
+        metadata={"help": "Warmup ratio for JORA pair selection."},
+    )
+    jora_single_sided: Optional[str] = field(
+        default="none",
+        metadata={"help": "Single-sided JORA ('none', 'left', 'right')."},
+    )
+    jora_pairing_strategy: Optional[str] = field(
+        default="consecutive",
+        metadata={"help": "Pairing strategy for JORA ('consecutive', 'high_low')."},
+    )
+    jora_ema_beta: Optional[float] = field(
+        default=0.98,
+        metadata={"help": "EMA beta for JORA activation tracking."},
+    )
+    jora_ema_grad_interval: Optional[int] = field(
+        default=1,
+        metadata={"help": "EMA gradient update interval for JORA."},
+    )
+    # P0 JORA learning rate parameters
+    jora_lr_theta: Optional[float] = field(
+        default=0.05,
+        metadata={"help": "Learning rate for JORA theta (rotation) parameters."},
+    )
+    jora_lr_core: Optional[float] = field(
+        default=0.01,
+        metadata={"help": "Learning rate for JORA core parameters."},
+    )
     use_nested_quant: Optional[bool] = field(
         default=False,
         metadata={"help": "Activate nested quantization for 4bit base models"},

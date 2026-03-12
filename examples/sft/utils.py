@@ -74,6 +74,23 @@ def create_datasets(tokenizer, data_args, training_args, apply_chat_template=Fal
 
     raw_datasets = DatasetDict()
     for split in data_args.splits.split(","):
+        # Prefer datasets previously materialized with Dataset.save_to_disk().
+        # This keeps local smoke tests and offline training flows deterministic.
+        local_split_path = os.path.join(data_args.dataset_name, split)
+        if os.path.isdir(local_split_path):
+            try:
+                dataset = load_from_disk(local_split_path)
+                if "train" in split:
+                    raw_datasets["train"] = dataset
+                elif "test" in split:
+                    raw_datasets["test"] = dataset
+                else:
+                    raise ValueError(f"Split type {split} not recognized as one of test or train.")
+                continue
+            except Exception:
+                # Fall through to regular hub/local-file loading below.
+                pass
+
         try:
             # Parse dataset name to support config specification (e.g., "gsm8k:main")
             dataset_name = data_args.dataset_name
@@ -251,6 +268,24 @@ def create_and_prepare_model(args, data_args, training_args):
             ema_update_interval=args.jora_ema_update_interval,
             selection_group_size=args.jora_selection_group_size,
             selection_group_by=args.jora_selection_group_by,
+            # P0 core parameters
+            core=args.jora_core,
+            block_size=args.jora_block_size,
+            lowrank_r=args.jora_lowrank_r,
+            lowrank_alpha=args.jora_lowrank_alpha,
+            zero_init_core=args.jora_zero_init_core,
+            # P0 OER parameters
+            oer_temperature=args.jora_oer_temperature,
+            # P0 schedule parameters
+            warmup_steps=args.jora_warmup_steps,
+            warmup_ratio=args.jora_warmup_ratio,
+            single_sided=args.jora_single_sided,
+            pairing_strategy=args.jora_pairing_strategy,
+            ema_beta=args.jora_ema_beta,
+            ema_grad_interval=args.jora_ema_grad_interval,
+            # P0 learning rate parameters
+            lr_theta=args.jora_lr_theta,
+            lr_core=args.jora_lr_core,
             inference_mode=False,
         )
     elif args.use_peft_lora and not args.use_unsloth:

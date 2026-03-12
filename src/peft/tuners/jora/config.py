@@ -126,7 +126,6 @@ class JoraConfig(PeftConfig):
     # These fields are kept for backward compatibility with older configs
     # They will be automatically mapped to their modern equivalents with warnings
     ablate_ecd: bool = False
-    use_ecd: bool = False
     use_cayley: Optional[bool] = None
 
     def __post_init__(self):

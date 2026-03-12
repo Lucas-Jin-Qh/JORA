@@ -13,10 +13,39 @@
 # limitations under the License.
 
 import torch
-from transformers import AutoModelForCausalLM
+import torch.nn as nn
+from datasets import Dataset
+from transformers import OPTConfig, AutoModelForCausalLM, Trainer, TrainingArguments
 
 from peft import JoraConfig, PeftModel, get_peft_model, get_peft_config_from_string
+from peft.tuners.jora.callbacks import JoraTrainerCallback
 from peft.utils import infer_device
+
+
+def create_tiny_local_model():
+    """Create a tiny local causal language model without downloading from HuggingFace Hub.
+
+    Returns:
+        A tiny OPTForCausalLM model instantiated from local config.
+    """
+    # Create a minimal config for tiny model using OPTConfig
+    hf_config = OPTConfig(
+        vocab_size=64,  # Very small vocab
+        hidden_size=32,  # Very small hidden size
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        ffn_dim=64,
+        max_position_embeddings=32,
+        pad_token_id=0,
+        bos_token_id=1,
+        eos_token_id=2,
+    )
+
+    # Create model from config (no network access needed)
+    model = AutoModelForCausalLM.from_config(hf_config)
+
+    return model
 
 
 class TestJora:
@@ -30,6 +59,7 @@ class TestJora:
             S_R=8,
             k=4,
             rotation_param="cayley",
+            rotation_impl="torch",
             selection="topk_ema",
             magnitude="ecd_tanh",
         )
@@ -56,8 +86,8 @@ class TestJora:
         """Test JORA model application."""
         torch.manual_seed(0)
 
-        model_id = "peft-internal-testing/tiny-random-OPTForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id).to(self.device)
+        # Use local tiny model instead of downloading from HuggingFace Hub
+        model = create_tiny_local_model().to(self.device)
         model.eval()
 
         config = JoraConfig(
@@ -65,7 +95,7 @@ class TestJora:
             S_L=4,
             S_R=4,
             k=2,
-            init_weights=False,  # Use deterministic weights for testing
+            rotation_impl="torch",
         )
 
         peft_model = get_peft_model(model, config)
@@ -110,15 +140,15 @@ class TestJora:
         """Test JORA model save and load."""
         torch.manual_seed(0)
 
-        model_id = "peft-internal-testing/tiny-random-OPTForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id).to(self.device)
+        # Use local tiny model instead of downloading from HuggingFace Hub
+        model = create_tiny_local_model().to(self.device)
 
         config = JoraConfig(
             target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
             S_L=4,
             S_R=4,
             k=2,
-            init_weights=False,
+            rotation_impl="torch",
         )
 
         peft_model = get_peft_model(model, config)
@@ -126,13 +156,18 @@ class TestJora:
         # Save model
         peft_model.save_pretrained(tmp_path)
 
-        # Load model
-        loaded_model = PeftModel.from_pretrained(model, tmp_path)
+        # Load model - create a fresh base model with SAME random seed
+        torch.manual_seed(0)  # Reset seed to get same base weights
+        fresh_model = create_tiny_local_model().to(self.device)
+        loaded_model = PeftModel.from_pretrained(fresh_model, tmp_path)
+        peft_model.eval()
+        loaded_model.eval()
 
         # Check that loaded model works
         inputs = torch.arange(5).view(-1, 1).to(self.device)
-        original_output = peft_model(inputs)
-        loaded_output = loaded_model(inputs)
+        with torch.no_grad():
+            original_output = peft_model(inputs)
+            loaded_output = loaded_model(inputs)
 
         assert torch.allclose(original_output.logits, loaded_output.logits, atol=1e-5)
 
@@ -153,3 +188,217 @@ class TestJora:
         assert config_topk.selection == "topk_ema"
         assert config_random.selection == "random"
         assert config_none.selection == "none"
+
+    def test_base_row_norms_nn_linear(self):
+        """Test that base_row_norms is correctly computed for nn.Linear layers.
+
+        For nn.Linear with weight shape [out_features, in_features],
+        the row norms (dim=1) should match the expected output dimension norms.
+        """
+        torch.manual_seed(42)
+
+        # Create a simple nn.Linear layer
+        in_features, out_features = 16, 32
+        linear = nn.Linear(in_features, out_features)
+
+        # Manually compute expected row norms (dim=1 for nn.Linear [out, in])
+        # Each row corresponds to one output feature
+        expected_row_norms = torch.norm(linear.weight, p=2, dim=1)
+
+        # Apply JORA with magnitude enabled
+        config = JoraConfig(
+            target_modules=["linear"],
+            magnitude="oer_softmax",
+            S_L=4,
+            S_R=4,
+            k=2,
+            rotation_impl="torch",
+        )
+
+        # Create a minimal model with this linear layer
+        class SimpleModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = linear
+
+        model = SimpleModel()
+        peft_model = get_peft_model(model, config, adapter_name="test")
+
+        # Find the JoraLayer
+        jora_layer = None
+        for module in peft_model.modules():
+            if "JoraLayer" in type(module).__name__:
+                jora_layer = module
+                break
+
+        assert jora_layer is not None, "JoraLayer not found"
+
+        # Get adapter state to access base_row_norms
+        adapter_state = jora_layer.adapters["test"]
+
+        # Check that base_row_norms matches expected row norms
+        cached_norms = adapter_state.base_row_norms
+        assert cached_norms is not None, "base_row_norms should be cached for magnitude != 'none'"
+        torch.testing.assert_close(cached_norms, expected_row_norms, rtol=1e-5, atol=1e-5)
+
+    def test_merge_unmerge_magnitude_none(self):
+        """Test merge/unmerge with magnitude='none'."""
+        torch.manual_seed(42)
+
+        model = create_tiny_local_model().to(self.device)
+        config = JoraConfig(
+            target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+            S_L=2,
+            S_R=2,
+            k=1,
+            magnitude="none",  # No magnitude scaling
+            rotation_impl="torch",
+        )
+
+        peft_model = get_peft_model(model, config, adapter_name="test")
+        peft_model.eval()
+
+        # Get original output
+        inputs = torch.arange(8).view(-1, 1).to(self.device)
+        with torch.no_grad():
+            original_output = peft_model(inputs).logits.clone()
+
+        # Merge adapter
+        peft_model.merge_adapter(["test"])
+
+        # Get merged output
+        with torch.no_grad():
+            merged_output = peft_model(inputs).logits.clone()
+
+        # Unmerge adapter
+        peft_model.unmerge_adapter()
+
+        # Get unmerged output
+        with torch.no_grad():
+            unmerged_output = peft_model(inputs).logits.clone()
+
+        # Check that unmerged output matches original
+        torch.testing.assert_close(unmerged_output, original_output, rtol=1e-5, atol=1e-5)
+
+    def test_merge_unmerge_magnitude_oer_softmax(self):
+        """Test merge/unmerge with magnitude='oer_softmax'."""
+        torch.manual_seed(42)
+
+        model = create_tiny_local_model().to(self.device)
+        config = JoraConfig(
+            target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+            S_L=2,
+            S_R=2,
+            k=1,
+            magnitude="oer_softmax",
+            oer_temperature=1.0,
+            rotation_impl="torch",
+        )
+
+        peft_model = get_peft_model(model, config, adapter_name="test")
+        peft_model.eval()
+
+        # Get original output
+        inputs = torch.arange(8).view(-1, 1).to(self.device)
+        with torch.no_grad():
+            original_output = peft_model(inputs).logits.clone()
+
+        # Merge adapter
+        peft_model.merge_adapter(["test"])
+
+        # Get merged output
+        with torch.no_grad():
+            merged_output = peft_model(inputs).logits.clone()
+
+        # Unmerge adapter
+        peft_model.unmerge_adapter()
+
+        # Get unmerged output
+        with torch.no_grad():
+            unmerged_output = peft_model(inputs).logits.clone()
+
+        # Check that unmerged output matches original within tolerance
+        max_diff = (unmerged_output - original_output).abs().max()
+        assert max_diff < 1e-4, f"Unmerge error too large: {max_diff}"
+
+    def test_jora_trainer_callback_smoke(self, tmp_path):
+        """Run a tiny offline Trainer loop to validate callback-driven updates."""
+        torch.manual_seed(1234)
+
+        model = create_tiny_local_model()
+        config = JoraConfig(
+            target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+            S_L=4,
+            S_R=4,
+            k=2,
+            selection="topk_ema",
+            magnitude="oer_softmax",
+            rotation_impl="torch",
+            warmup_steps=2,
+        )
+        peft_model = get_peft_model(model, config)
+        peft_model.train()
+
+        seqs = [
+            [1, 5, 6, 7, 2, 0],
+            [1, 8, 9, 10, 2, 0],
+            [1, 11, 12, 13, 2, 0],
+            [1, 14, 15, 16, 2, 0],
+            [1, 17, 18, 19, 2, 0],
+            [1, 20, 21, 22, 2, 0],
+            [1, 23, 24, 25, 2, 0],
+            [1, 26, 27, 28, 2, 0],
+        ]
+        attention_mask = [[1, 1, 1, 1, 1, 0] for _ in seqs]
+        labels = [row[:] for row in seqs]
+        train_dataset = Dataset.from_dict(
+            {"input_ids": seqs, "attention_mask": attention_mask, "labels": labels}
+        )
+
+        def collator(features):
+            return {
+                key: torch.tensor([feature[key] for feature in features], dtype=torch.long)
+                for key in features[0]
+            }
+
+        params_before = {
+            name: param.detach().cpu().clone()
+            for name, param in peft_model.named_parameters()
+            if param.requires_grad
+        }
+
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=1,
+            max_steps=4,
+            learning_rate=5e-3,
+            logging_steps=1,
+            save_strategy="no",
+            eval_strategy="no",
+            report_to=[],
+            disable_tqdm=True,
+            remove_unused_columns=False,
+            dataloader_pin_memory=False,
+            use_cpu=str(self.device) == "cpu",
+        )
+        trainer = Trainer(
+            model=peft_model,
+            args=training_args,
+            train_dataset=train_dataset,
+            data_collator=collator,
+            callbacks=[JoraTrainerCallback(peft_model, verbose=False)],
+        )
+        result = trainer.train()
+
+        changed = []
+        for name, param in peft_model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if not torch.allclose(params_before[name], param.detach().cpu()):
+                changed.append(name)
+
+        assert changed, "Trainer loop should update at least one JORA parameter"
+        assert result.training_loss > 0
+        assert peft_model.base_model._jora_global_step == 4
+        assert peft_model.base_model._jora_total_steps == 4

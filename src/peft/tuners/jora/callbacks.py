@@ -5,13 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 import logging
 
+from transformers import TrainerCallback
+
 if TYPE_CHECKING:
-    from transformers import TrainerCallback, TrainerState, TrainerControl, TrainingArguments
+    from transformers import TrainerState, TrainerControl, TrainingArguments
 
 logger = logging.getLogger(__name__)
 
 
-class JoraTrainerCallback:
+class JoraTrainerCallback(TrainerCallback):
     """HuggingFace Trainer callback for reliable JORA selection/temperature updates.
 
     This callback solves the critical issue that PyTorch's `register_full_backward_hook`
@@ -228,7 +230,7 @@ class JoraTrainerCallback:
         pass
 
 
-class JoraSchedulerCallback:
+class JoraSchedulerCallback(TrainerCallback):
     """Optional callback for custom JORA scheduling strategies.
 
     This provides hooks for advanced users who want custom warmup/annealing
