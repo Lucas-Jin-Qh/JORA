@@ -197,7 +197,7 @@ run_resume() {
         --jora_warmup_steps $JORA_WARMUP_STEPS
 
     # Validate global_step continuity
-    python - <<'PY'
+    python - <<PY
 import json
 from pathlib import Path
 state = json.loads(Path("$output_dir/checkpoint-$resume_steps/trainer_state.json").read_text())

@@ -311,16 +311,13 @@ def main(model_args, data_args, training_args):
         from peft.tuners.jora.callbacks import JoraTrainerCallback
         callbacks.append(JoraTrainerCallback(model, verbose=False))
 
-    # Add callbacks to training args instead of passing directly to SFTTrainer
-    if callbacks:
-        training_args.callbacks = callbacks
-
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=peft_config,
+        callbacks=callbacks,
     )
     trainer.accelerator.print(f"{trainer.model}")
     if hasattr(trainer.model, "print_trainable_parameters"):
