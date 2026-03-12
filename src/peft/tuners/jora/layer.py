@@ -114,13 +114,20 @@ class _JoraAdapterState(nn.Module):
                         padding = torch.ones(padding_size, device=base_row_norms.device, dtype=base_row_norms.dtype)
                         base_row_norms = torch.cat([base_row_norms, padding])
 
-                total_energy = (base_row_norms.float() ** 2).sum()
+                base_row_norms_fp32 = base_row_norms.float()
+                total_energy = (base_row_norms_fp32 ** 2).sum()
             self.register_buffer("base_row_norms", base_row_norms, persistent=True)
             # Cache fp32 version to avoid repeated .float() calls during magnitude computation
-            self.register_buffer("base_row_norms_fp32", base_row_norms.float(), persistent=False)
+            self.register_buffer("base_row_norms_fp32", base_row_norms_fp32, persistent=False)
             self.register_buffer("total_energy", total_energy, persistent=True)
-            # Parameter is interpreted as either tanh-gate (ecd_tanh) or softmax logits (oer_softmax)
-            self.ecd_log_mag = nn.Parameter(torch.zeros(self.n, device=dev, dtype=dt))
+            # OER must start from the base energy distribution; zero logits would force a uniform
+            # redistribution and introduce a large step-0 drift before any learning happens.
+            if mag == "oer_softmax":
+                init_logits = torch.clamp(base_row_norms_fp32.pow(2), min=float(cfg.eps)).log()
+                self.ecd_log_mag = nn.Parameter(init_logits.to(device=dev, dtype=dt))
+            else:
+                # Legacy tanh gating keeps a zero-centered initialization.
+                self.ecd_log_mag = nn.Parameter(torch.zeros(self.n, device=dev, dtype=dt))
         else:
             self.register_buffer("base_row_norms", torch.ones(self.n, device=dev, dtype=dt), persistent=False)
             self.register_buffer("total_energy", torch.ones((), device=dev, dtype=torch.float32), persistent=False)

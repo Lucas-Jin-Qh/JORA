@@ -19,6 +19,7 @@ from transformers import OPTConfig, AutoModelForCausalLM, Trainer, TrainingArgum
 
 from peft import JoraConfig, PeftModel, get_peft_model, get_peft_config_from_string
 from peft.tuners.jora.callbacks import JoraTrainerCallback
+from peft.tuners.jora.magnitude import compute_oer_scale_softmax
 from peft.utils import infer_device
 
 
@@ -320,6 +321,57 @@ class TestJora:
         # Check that unmerged output matches original within tolerance
         max_diff = (unmerged_output - original_output).abs().max()
         assert max_diff < 1e-4, f"Unmerge error too large: {max_diff}"
+
+    def test_oer_softmax_initialization_is_identity(self):
+        """OER should preserve the base output at init when delta path is zero."""
+        torch.manual_seed(42)
+
+        linear = nn.Linear(16, 32).to(self.device)
+
+        class SimpleModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = linear
+
+        model = SimpleModel().to(self.device)
+        config = JoraConfig(
+            target_modules=["linear"],
+            magnitude="oer_softmax",
+            oer_temperature=1.0,
+            selection="none",
+            S_L=0,
+            S_R=0,
+            k=0,
+            zero_init_core=True,
+            rotation_impl="torch",
+        )
+
+        peft_model = get_peft_model(model, config, adapter_name="test")
+
+        jora_layer = None
+        for module in peft_model.modules():
+            if "JoraLayer" in type(module).__name__:
+                jora_layer = module
+                break
+
+        assert jora_layer is not None, "JoraLayer not found"
+
+        adapter_state = jora_layer.adapters["test"]
+        scale = compute_oer_scale_softmax(
+            base_row_norms=adapter_state.base_row_norms_fp32,
+            total_energy=adapter_state.total_energy,
+            oer_logits=adapter_state.ecd_log_mag,
+            temperature=adapter_state.cfg.oer_temperature,
+            eps=adapter_state.cfg.eps,
+        )
+        torch.testing.assert_close(scale, torch.ones_like(scale), rtol=1e-5, atol=1e-5)
+
+        x = torch.randn(4, 16, device=self.device)
+        with torch.no_grad():
+            base_out = jora_layer.base_layer(x)
+            jora_out = jora_layer(x)
+
+        torch.testing.assert_close(jora_out, base_out, rtol=1e-5, atol=1e-5)
 
     def test_jora_trainer_callback_smoke(self, tmp_path):
         """Run a tiny offline Trainer loop to validate callback-driven updates."""
