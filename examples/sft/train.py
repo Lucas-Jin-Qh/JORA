@@ -323,6 +323,66 @@ def main(model_args, data_args, training_args):
     if hasattr(trainer.model, "print_trainable_parameters"):
         trainer.model.print_trainable_parameters()
 
+    # Apply JORA-specific learning rates if configured
+    if model_args.use_peft_jora and (model_args.jora_lr_theta is not None or model_args.jora_lr_core is not None):
+        # Get the base optimizer created by SFTTrainer
+        optimizer = trainer.optimizer
+        if optimizer is not None:
+            # Get JORA-specific learning rates (default to global LR if not specified)
+            lr_theta = model_args.jora_lr_theta if model_args.jora_lr_theta is not None else training_args.learning_rate
+            lr_core = model_args.jora_lr_core if model_args.jora_lr_core is not None else training_args.learning_rate
+
+            # Build param groups for different JORA components based on named_parameters
+            param_groups = {
+                "theta": {"params": [], "lr": lr_theta},
+                "core": {"params": [], "lr": lr_core},
+                "other": {"params": [], "lr": training_args.learning_rate},
+            }
+
+            for name, param in trainer.model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                # Classify parameters by name
+                if "theta_L" in name or "theta_R" in name:
+                    # Theta parameters (rotation angles)
+                    param_groups["theta"]["params"].append(param)
+                elif ".core." in name or "diag_params" in name or "ecd_log_mag" in name:
+                    # Core parameters (DiagCore, magnitude, etc.)
+                    param_groups["core"]["params"].append(param)
+                else:
+                    param_groups["other"]["params"].append(param)
+
+            # Build final optimizer param groups with weight_decay
+            new_param_groups = []
+            wd = optimizer.defaults.get("weight_decay", 0.0)
+
+            if param_groups["theta"]["params"]:
+                new_param_groups.append({
+                    "params": param_groups["theta"]["params"],
+                    "lr": lr_theta,
+                    "weight_decay": wd,
+                })
+            if param_groups["core"]["params"]:
+                new_param_groups.append({
+                    "params": param_groups["core"]["params"],
+                    "lr": lr_core,
+                    "weight_decay": wd,
+                })
+            if param_groups["other"]["params"]:
+                new_param_groups.append({
+                    "params": param_groups["other"]["params"],
+                    "lr": training_args.learning_rate,
+                    "weight_decay": wd,
+                })
+
+            # Replace optimizer with new param groups
+            trainer.optimizer = optimizer.__class__(
+                new_param_groups,
+                lr=training_args.learning_rate,
+                weight_decay=wd,
+            )
+            trainer.accelerator.print(f"Applied JORA-specific LR: theta={lr_theta}, core={lr_core}")
+
     # train
     checkpoint = None
     if training_args.resume_from_checkpoint is not None:
