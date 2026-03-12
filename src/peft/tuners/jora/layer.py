@@ -238,24 +238,12 @@ class _JoraAdapterState(nn.Module):
 
         allowed_count = min(allowed_count, cap)
 
-        # Check if update is needed by reading current active count from Python cache
-        if not hasattr(self, '_counter_cache'):
-            self._counter_cache = {'left': 0, 'right': 0}
-
-        cur = self._counter_cache.get(side, 0) if side else 0
-
-        # Only update if we need more pairs than currently active
-        if cur >= allowed_count:
-            return
-
+        # Always re-select pairs based on current EMA statistics
+        # Do NOT cache or early-return, as EMA changes each step and pairs should adapt
         energy = maybe_gumbel(energy_src, self.cfg.use_gumbel, self.cfg.gumbel_tau)
         pairing_strategy = getattr(self.cfg, "pairing_strategy", "consecutive")
         new_pairs = select_top_k_pairs_gpu(energy, k=allowed_count, max_features=int(feature_dim), pairing_strategy=pairing_strategy)
         self._write_pairs(target_buffer, target_counter, new_pairs, side)
-
-        # Update cache after writing pairs
-        if side:
-            self._counter_cache[side] = allowed_count
 
     @torch.no_grad()
     def update_step(self, current_step: int, total_steps: int | None = None):
@@ -473,7 +461,9 @@ class JoraLayer(nn.Module, BaseTunerLayer):
                 return
 
             g = grad_output[0].detach()
-            if torch.isnan(g).any() or torch.isinf(g).any():
+            # Skip EMA update if gradient has NaN/Inf - avoid blocking sync in hot path
+            # Using isfinite which combines both nan and inf checks
+            if not torch.isfinite(g).all():
                 return
             g_sq = g.reshape(-1, st.n).float().pow(2).mean(dim=0)
             beta = float(st.cfg.ema_beta)
@@ -495,7 +485,8 @@ class JoraLayer(nn.Module, BaseTunerLayer):
             if ema_interval <= 1 or (self._ema_step_counter % ema_interval) == 0:
                 with torch.no_grad():
                     xd = x.detach()
-                    if not torch.isnan(xd).any() and not torch.isinf(xd).any():
+                    # Skip EMA update if input has NaN/Inf - avoid blocking sync in hot path
+                    if torch.isfinite(xd).all():
                         x_sq = xd.reshape(-1, st.m).float().pow(2).mean(dim=0)
                         beta = float(st.cfg.ema_beta)
                         st.grad_col_ema.lerp_(x_sq, 1.0 - beta)  # Fused EMA update for better performance
