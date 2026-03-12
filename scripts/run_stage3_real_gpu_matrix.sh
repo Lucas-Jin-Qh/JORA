@@ -70,7 +70,7 @@ output_dir = Path("$output_dir")
 assert (output_dir / "adapter_config.json").exists(), output_dir
 assert (output_dir / "adapter_model.safetensors").exists(), output_dir
 
-base = AutoModelForCausalLM.from_pretrained(snapshot_path, torch_dtype=torch.bfloat16)
+base = AutoModelForCausalLM.from_pretrained(snapshot_path, dtype=torch.bfloat16)
 model = PeftModel.from_pretrained(base, output_dir)
 tokenizer = AutoTokenizer.from_pretrained(snapshot_path)
 model.eval().cuda()
