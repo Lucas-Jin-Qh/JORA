@@ -249,6 +249,15 @@ case "${1:-}" in
         print_summary
         JORA_OER_TEMP=2.0 JORA_LR_THETA=0.05 JORA_LR_CORE=0.01 train_jora "$WORKDIR/out_jora_t2_lr"
         ;;
+    # Long training: oer_softmax vs none comparison
+    jora_long_oer)
+        print_summary
+        train_jora "$WORKDIR/out_jora_long_oer"
+        ;;
+    jora_long_none)
+        print_summary
+        JORA_MAGNITUDE=none train_jora "$WORKDIR/out_jora_long_none"
+        ;;
     lora)
         print_summary
         train_lora "$WORKDIR/out_lora_r${LORA_R}" "$LORA_R"
