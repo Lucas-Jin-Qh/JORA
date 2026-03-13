@@ -45,6 +45,7 @@ echo "MMLU samples: ${NUM_EVAL_SAMPLES:-full}"
 echo ""
 
 mkdir -p "$WORKDIR"
+RESULTS_FILE="$WORKDIR/results.txt"
 
 ensure_absent() {
     if [ -d "$1" ]; then
@@ -185,29 +186,35 @@ def format_prompt(row):
     choices = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(row["choices"])])
     return f"{question}\n{choices}\nAnswer:"
 
+choice_texts = [" A", " B", " C", " D"]
+
+def score_choice(prompt, choice_text):
+    prompt_ids = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)["input_ids"].to(model.device)
+    full_ids = tokenizer(prompt + choice_text, return_tensors="pt", truncation=True, max_length=1024)["input_ids"].to(model.device)
+    choice_ids = full_ids[:, prompt_ids.shape[1]:]
+    if choice_ids.numel() == 0:
+        return float("-inf")
+
+    with torch.no_grad():
+        outputs = model(full_ids)
+        log_probs = outputs.logits[:, :-1, :].log_softmax(dim=-1)
+
+    start = prompt_ids.shape[1] - 1
+    end = full_ids.shape[1] - 1
+    token_log_probs = log_probs[:, start:end, :]
+    gathered = token_log_probs.gather(-1, choice_ids.unsqueeze(-1)).squeeze(-1)
+    return gathered.sum().item()
+
 correct = 0
 total = 0
 for i, row in enumerate(ds):
     prompt = format_prompt(row)
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to(model.device)
-    
-    with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits
-        
-        # Get token predictions for answer choices
-        answer_tokens = tokenizer([" A", " B", " C", " D"], return_tensors="pt")["input_ids"].to(model.device)
-        answer_logits = logits[0, -1, answer_tokens[0]].argmax().item()
-        
-        pred_token = answer_tokens[0, answer_logits].item()
-        pred_letter = tokenizer.decode(pred_token).strip()
-        
-        true_idx = row["answer"]
-        true_letter = chr(65 + true_idx)
-        
-        if pred_letter == true_letter:
-            correct += 1
-        total += 1
+    choice_scores = [score_choice(prompt, choice_text) for choice_text in choice_texts]
+    pred_idx = max(range(len(choice_scores)), key=lambda idx: choice_scores[idx])
+    true_idx = row["answer"]
+    if pred_idx == true_idx:
+        correct += 1
+    total += 1
     
     if (i + 1) % 200 == 0:
         print(f"  Progress: {i+1}/{total}, Accuracy: {correct/total:.4f}")
@@ -218,10 +225,10 @@ print(f"MMLU Accuracy ({total} samples): {accuracy:.4f}")
 print(f"Correct: {correct}/{total}")
 
 # Save result
-with open("$WORKDIR/results.txt", "a") as f:
+with open("$RESULTS_FILE", "a") as f:
     f.write(f"$output_name MMLU: {accuracy:.4f} ({correct}/{total})\n")
 
-print(f"Saved to $WORKDIR/results.txt")
+print(f"Saved to $RESULTS_FILE")
 EOF
 }
 
@@ -254,27 +261,34 @@ def format_prompt(row):
     choices = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(row["choices"])])
     return f"{question}\n{choices}\nAnswer:"
 
+choice_texts = [" A", " B", " C", " D"]
+
+def score_choice(prompt, choice_text):
+    prompt_ids = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)["input_ids"].to(model.device)
+    full_ids = tokenizer(prompt + choice_text, return_tensors="pt", truncation=True, max_length=1024)["input_ids"].to(model.device)
+    choice_ids = full_ids[:, prompt_ids.shape[1]:]
+    if choice_ids.numel() == 0:
+        return float("-inf")
+
+    with torch.no_grad():
+        outputs = model(full_ids)
+        log_probs = outputs.logits[:, :-1, :].log_softmax(dim=-1)
+
+    start = prompt_ids.shape[1] - 1
+    end = full_ids.shape[1] - 1
+    token_log_probs = log_probs[:, start:end, :]
+    gathered = token_log_probs.gather(-1, choice_ids.unsqueeze(-1)).squeeze(-1)
+    return gathered.sum().item()
+
 correct = 0
 total = 0
 for i, row in enumerate(ds):
     prompt = format_prompt(row)
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to(model.device)
-    
-    with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits
-        
-        answer_tokens = tokenizer([" A", " B", " C", " D"], return_tensors="pt")["input_ids"].to(model.device)
-        answer_logits = logits[0, -1, answer_tokens[0]].argmax().item()
-        
-        pred_token = answer_tokens[0, answer_logits].item()
-        pred_letter = tokenizer.decode(pred_token).strip()
-        
-        true_letter = chr(65 + row["answer"])
-        
-        if pred_letter == true_letter:
-            correct += 1
-        total += 1
+    choice_scores = [score_choice(prompt, choice_text) for choice_text in choice_texts]
+    pred_idx = max(range(len(choice_scores)), key=lambda idx: choice_scores[idx])
+    if pred_idx == row["answer"]:
+        correct += 1
+    total += 1
     
     if (i + 1) % 200 == 0:
         print(f"  Progress: {i+1}/{total}, Accuracy: {correct/total:.4f}")
@@ -284,7 +298,7 @@ print(f"\n=== Base Model ===")
 print(f"MMLU Accuracy ({total} samples): {accuracy:.4f}")
 print(f"Correct: {correct}/{total}")
 
-with open("$WORKDIR/results.txt", "a") as f:
+with open("$RESULTS_FILE", "a") as f:
     f.write(f"Base Model MMLU: {accuracy:.4f} ({correct}/{total})\n")
 EOF
 }
@@ -327,6 +341,7 @@ case "${1:-}" in
         ;;
     all)
         print_summary
+        rm -f "$RESULTS_FILE"
         eval_base
         train_jora "$WORKDIR/out_jora_oer" "oer_softmax"
         run_mmlu_eval "$WORKDIR/out_jora_oer" "JORA-oer_softmax" "$NUM_EVAL_SAMPLES"
@@ -337,7 +352,7 @@ case "${1:-}" in
         
         echo ""
         echo "=== FINAL RESULTS ==="
-        cat "$WORKDIR/results.txt"
+        cat "$RESULTS_FILE"
         ;;
     help|--help|-h)
         print_help

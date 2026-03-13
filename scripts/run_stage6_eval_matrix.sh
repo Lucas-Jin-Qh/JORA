@@ -211,31 +211,35 @@ def format_prompt(row):
     choices = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(row["choices"])])
     return f"{question}\n{choices}\nAnswer:"
 
+choice_texts = [" A", " B", " C", " D"]
+
+def score_choice(prompt, choice_text):
+    prompt_ids = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)["input_ids"].to(model.device)
+    full_ids = tokenizer(prompt + choice_text, return_tensors="pt", truncation=True, max_length=1024)["input_ids"].to(model.device)
+    choice_ids = full_ids[:, prompt_ids.shape[1]:]
+    if choice_ids.numel() == 0:
+        return float("-inf")
+
+    with torch.no_grad():
+        outputs = model(full_ids)
+        log_probs = outputs.logits[:, :-1, :].log_softmax(dim=-1)
+
+    start = prompt_ids.shape[1] - 1
+    end = full_ids.shape[1] - 1
+    token_log_probs = log_probs[:, start:end, :]
+    gathered = token_log_probs.gather(-1, choice_ids.unsqueeze(-1)).squeeze(-1)
+    return gathered.sum().item()
+
 correct = 0
 total = 0
 for i, row in enumerate(ds):
     prompt = format_prompt(row)
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    
-    with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits
-        
-        # Get token predictions for answer choices (A, B, C, D)
-        answer_tokens = tokenizer([" A", " B", " C", " D"], return_tensors="pt")["input_ids"].to(model.device)
-        answer_logits = logits[0, -1, answer_tokens[0]].argmax().item()
-        
-        # Map token to letter
-        pred_idx = answer_tokens[0, answer_logits].item()
-        pred_letter = tokenizer.decode(pred_idx).strip()
-        
-        # Answer is index (0=A, 1=B, 2=C, 3=D)
-        true_idx = row["answer"]
-        true_letter = chr(65 + true_idx)
-        
-        if pred_letter == true_letter:
-            correct += 1
-        total += 1
+    choice_scores = [score_choice(prompt, choice_text) for choice_text in choice_texts]
+    pred_idx = max(range(len(choice_scores)), key=lambda idx: choice_scores[idx])
+    true_idx = row["answer"]
+    if pred_idx == true_idx:
+        correct += 1
+    total += 1
     
     if (i + 1) % 20 == 0:
         print(f"  Progress: {i+1}/{total}, Accuracy: {correct/total:.4f}")
