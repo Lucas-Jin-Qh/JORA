@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 import torch.nn as nn
 from datasets import Dataset
@@ -20,6 +21,8 @@ from transformers import OPTConfig, AutoModelForCausalLM, Trainer, TrainingArgum
 from peft import JoraConfig, PeftModel, get_peft_model, get_peft_config_from_string
 from peft.tuners.jora.callbacks import JoraTrainerCallback
 from peft.tuners.jora.magnitude import compute_oer_scale_softmax
+from peft.tuners.jora.rotation import apply_rotations_torch
+from peft.tuners.jora.selection import select_top_k_pairs_gpu
 from peft.utils import infer_device
 
 
@@ -280,6 +283,26 @@ class TestJora:
 
         # Check that unmerged output matches original
         torch.testing.assert_close(unmerged_output, original_output, rtol=1e-5, atol=1e-5)
+
+    def test_select_top_k_pairs_returns_disjoint_greedy_pairs(self):
+        """Selection must return pairwise-disjoint pairs in descending greedy order."""
+        energy = torch.tensor([10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0])
+
+        pairs = select_top_k_pairs_gpu(energy, k=4, max_features=energy.numel())
+
+        expected = torch.tensor([[0, 1], [2, 3], [4, 5], [6, 7]])
+        normalized = torch.sort(pairs, dim=1).values
+
+        torch.testing.assert_close(normalized.cpu(), expected)
+
+    def test_apply_rotations_rejects_overlapping_pairs(self):
+        """Rotation path should fail fast if selection emits overlapping pairs."""
+        x = torch.randn(2, 8)
+        pairs = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+        thetas = torch.zeros(2)
+
+        with pytest.raises(ValueError, match="overlapping indices"):
+            apply_rotations_torch(x, pairs, thetas)
 
     def test_merge_unmerge_magnitude_oer_softmax(self):
         """Test merge/unmerge with magnitude='oer_softmax'."""

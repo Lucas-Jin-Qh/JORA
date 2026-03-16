@@ -45,6 +45,12 @@ def _validate_pairs(pairs: Tensor, dim: int) -> None:
         )
     if (pairs >= dim).any():
         raise ValueError(f"pairs contains out-of-range indices for dim={dim}.")
+    flat = pairs.reshape(-1)
+    if torch.unique(flat).numel() != flat.numel():
+        raise ValueError(
+            "pairs contains overlapping indices across rotations. "
+            "JORA rotations require pairwise-disjoint indices for safe vectorized updates."
+        )
 
 def apply_rotations_torch(
     x: Tensor,
