@@ -201,7 +201,7 @@ model.eval()
 
 # Load MMLU
 from datasets import load_dataset
-ds = load_dataset("mmlu", "all", split="test")
+ds = load_dataset("cais/mmlu", "all", split="test")
 num_samples = $NUM_EVAL_SAMPLES
 ds = ds.select(range(num_samples))
 

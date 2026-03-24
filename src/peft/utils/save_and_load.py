@@ -41,6 +41,24 @@ from .other import (
 )
 from .peft_types import PeftType
 
+_JORA_INFERENCE_STATE_ROOTS = (
+    "theta_L",
+    "theta_R",
+    "core",
+    "ecd_log_mag",
+    "pairs_L",
+    "pairs_R",
+    "num_pairs_L",
+    "num_pairs_R",
+    # Training-state buffers needed for safe checkpoint/resume.
+    # Without these, resumed training can reopen pair selection and lose calibration history.
+    "pairs_frozen_flag",
+    "grad_row_ema",
+    "grad_col_ema",
+    "step_idx",
+    "ema_step_idx",
+)
+
 
 def has_valid_embedding_base_layer(layer):
     """Check if the layer has an embedding base layer"""
@@ -53,6 +71,42 @@ def get_embedding_layer_name(model, layer, is_embedding_in_target_modules):
         if (not is_embedding_in_target_modules and module == layer) or module == getattr(layer, "base_layer", None):
             return name
     return None
+
+
+def _is_jora_inference_state_key(key: str, adapter_name: str) -> bool:
+    marker = f".adapters.{adapter_name}."
+    if marker not in key:
+        return False
+    suffix = key.split(marker, 1)[1]
+    root = suffix.split(".", 1)[0]
+    return root in _JORA_INFERENCE_STATE_ROOTS
+
+
+def _insert_adapter_name_into_jora_state_dict(
+    state_dict: dict[str, torch.Tensor], adapter_name: str
+) -> dict[str, torch.Tensor]:
+    peft_model_state_dict = {}
+    for key, val in state_dict.items():
+        prefix, marker, suffix = key.partition(".adapters.")
+        if marker:
+            root = suffix.split(".", 1)[0]
+            if root in _JORA_INFERENCE_STATE_ROOTS:
+                key = f"{prefix}{marker}{adapter_name}.{suffix}"
+        peft_model_state_dict[key] = val
+    return peft_model_state_dict
+
+
+def _remove_adapter_name_from_jora_state_dict_key(key: str, adapter_name: str) -> str:
+    marker = f".adapters.{adapter_name}."
+    prefix, found_marker, suffix = key.partition(marker)
+    if not found_marker:
+        return key
+
+    root = suffix.split(".", 1)[0]
+    if root not in _JORA_INFERENCE_STATE_ROOTS:
+        return key
+
+    return f"{prefix}.adapters.{suffix}"
 
 
 def get_peft_model_state_dict(
@@ -222,6 +276,8 @@ def get_peft_model_state_dict(
         to_return["base_model.vblora_vector_bank." + adapter_name] = state_dict[
             "base_model.vblora_vector_bank." + adapter_name
         ]
+    elif config.peft_type == PeftType.JORA:
+        to_return = {k: state_dict[k] for k in state_dict if _is_jora_inference_state_key(k, adapter_name)}
     elif config.peft_type in list(PeftType):
         prefix = PEFT_TYPE_TO_PREFIX_MAPPING[config.peft_type]
         to_return = {k: state_dict[k] for k in state_dict if prefix in k}
@@ -333,6 +389,9 @@ def get_peft_model_state_dict(
         if "." not in key:
             # nothing to do
             return key
+
+        if config.peft_type == PeftType.JORA:
+            return _remove_adapter_name_from_jora_state_dict_key(key, adapter_name)
 
         if key.endswith(f".{adapter_name}"):
             # comes from an nn.Parameter, so no .weight suffix, the adapter name is directly at the end
@@ -497,9 +556,14 @@ def set_peft_model_state_dict(
                     del state_dict[k]
                     del state_dict[k.replace("_topk_indices", "_topk_weights")]
 
-        peft_model_state_dict = _insert_adapter_name_into_state_dict(
-            state_dict, adapter_name=adapter_name, parameter_prefix=parameter_prefix
-        )
+        if config.peft_type == PeftType.JORA:
+            peft_model_state_dict = _insert_adapter_name_into_jora_state_dict(
+                state_dict, adapter_name=adapter_name
+            )
+        else:
+            peft_model_state_dict = _insert_adapter_name_into_state_dict(
+                state_dict, adapter_name=adapter_name, parameter_prefix=parameter_prefix
+            )
 
         if config.peft_type == PeftType.ADALORA:
             rank_pattern = config.rank_pattern

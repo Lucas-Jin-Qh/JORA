@@ -377,6 +377,20 @@ def apply_rotations(
                 negate_theta=negate_theta,
             )
 
+        # For "auto" mode: fall back to torch if pairs may be out of bounds for x,
+        # or if tensor is on CPU (Triton doesn't support CPU tensors).
+        # Triton kernel does not validate indices; non-square layers (n_in != n_out)
+        # can produce pairs indexed against the wrong dimension, causing silent OOB.
+        if impl == "auto" and (x.device.type == "cpu" or (pairs.numel() > 0 and int(pairs.max()) >= x.shape[-1])):
+            return apply_rotations_torch(
+                x,
+                pairs,
+                thetas,
+                reverse=reverse,
+                rotation_param=rotation_param,
+                negate_theta=negate_theta,
+            )
+
         # Use Triton implementation
         use_cayley = (rotation_param == "cayley")
         th = thetas

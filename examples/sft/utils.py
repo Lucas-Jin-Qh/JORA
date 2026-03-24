@@ -253,10 +253,17 @@ def create_and_prepare_model(args, data_args, training_args):
     peft_config = None
     chat_template = None
     if args.use_peft_jora and not args.use_peft_lora and not args.use_unsloth:
-        peft_config = JoraConfig(
-            target_modules=args.lora_target_modules.split(",")
-            if args.lora_target_modules != "all-linear"
-            else args.lora_target_modules,
+        jora_target_modules = args.jora_target_modules or args.lora_target_modules
+        if args.jora_core == "selective_diag" and args.jora_target_modules is None:
+            jora_target_modules = "q_proj,k_proj,v_proj,o_proj"
+        target_modules = (
+            jora_target_modules.split(",")
+            if jora_target_modules != "all-linear"
+            else jora_target_modules
+        )
+
+        jora_kwargs = dict(
+            target_modules=target_modules,
             S_L=args.jora_s_l,
             S_R=args.jora_s_r,
             k=args.jora_k,
@@ -274,6 +281,9 @@ def create_and_prepare_model(args, data_args, training_args):
             lowrank_r=args.jora_lowrank_r,
             lowrank_alpha=args.jora_lowrank_alpha,
             zero_init_core=args.jora_zero_init_core,
+            # Paper-path calibration parameters (only pass if explicitly set, to preserve paper_path() defaults)
+            **({"t_stat": args.jora_t_stat} if args.jora_t_stat is not None else {}),
+            **({"pairs_freeze_after_warmup": args.jora_pairs_freeze_after_warmup} if args.jora_pairs_freeze_after_warmup is not None else {}),
             # P0 OER parameters
             oer_temperature=args.jora_oer_temperature,
             # P0 schedule parameters
@@ -288,6 +298,11 @@ def create_and_prepare_model(args, data_args, training_args):
             lr_core=args.jora_lr_core,
             inference_mode=False,
         )
+
+        if args.jora_core == "selective_diag":
+            peft_config = JoraConfig.paper_path(**jora_kwargs)
+        else:
+            peft_config = JoraConfig(**jora_kwargs)
     elif args.use_peft_lora and not args.use_unsloth:
         peft_config = LoraConfig(
             lora_alpha=args.lora_alpha,

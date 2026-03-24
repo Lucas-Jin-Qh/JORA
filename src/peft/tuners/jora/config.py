@@ -8,7 +8,7 @@ from peft.utils import PeftType
 
 RotationParam = Literal["cayley", "angle"]
 RotationImpl = Literal["auto", "triton", "torch"]
-CoreType = Literal["diag", "block", "lowrank"]
+CoreType = Literal["diag", "block", "lowrank", "selective_diag"]
 SelectionType = Literal["topk_ema", "random", "none"]
 MagnitudeType = Literal["none", "ecd_tanh", "oer_softmax"]
 PairingStrategy = Literal["consecutive", "high_low"]
@@ -118,6 +118,15 @@ class JoraConfig(PeftConfig):
     magnitude_lr_scale: float = 1.0
     chunk_size: int = 512  # for OER, if enabled
 
+    # ---- JORA: paper-path calibration ----
+    # t_stat: number of calibration steps (EMA collection only, no optimizer step).
+    # After t_stat steps, support U is frozen via set_support() for SelectiveDiagCore.
+    # 0 = no calibration phase (legacy behavior).
+    t_stat: int = 0
+    # pairs_freeze_after_warmup: when True, pairs are frozen after warmup completes (one-shot allocation).
+    # When False (legacy), pairs are re-selected every update_interval steps.
+    pairs_freeze_after_warmup: bool = False
+
     # ---- misc ----
     single_sided: Literal["none", "left", "right"] = "none"
     eps: float = 1e-8
@@ -127,6 +136,39 @@ class JoraConfig(PeftConfig):
     # They will be automatically mapped to their modern equivalents with warnings
     ablate_ecd: bool = False
     use_cayley: Optional[bool] = None
+
+    @classmethod
+    def paper_path(cls, **kwargs) -> "JoraConfig":
+        """Factory for the paper-exact JORA configuration.
+
+        Sets the canonical paper-path defaults:
+            core="selective_diag"   — only |U|=2k params, applied to support U only
+            magnitude="none"        — no magnitude module (paper doesn't use one)
+            zero_init_core=True     — delta=0 at init → adapter starts as identity
+            pairs_freeze_after_warmup=True  — one-shot support allocation after warmup
+            theta_init_std=0.0      — zero-init rotations (adapter starts as identity)
+
+        Override any of these by passing keyword arguments.
+
+        Example::
+
+            cfg = JoraConfig.paper_path(
+                target_modules=["q_proj", "v_proj"],
+                k=8,
+                S_L=32,
+                S_R=32,
+                t_stat=100,
+            )
+        """
+        defaults = dict(
+            core="selective_diag",
+            magnitude="none",
+            zero_init_core=True,
+            pairs_freeze_after_warmup=True,
+            theta_init_std=0.0,
+        )
+        defaults.update(kwargs)
+        return cls(**defaults)
 
     def __post_init__(self):
         # Call parent __post_init__ if it exists (compat with different PEFT versions)

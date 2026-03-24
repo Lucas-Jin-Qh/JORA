@@ -77,6 +77,17 @@ def get_fbd_cuda():
     if _FBD_CUDA is not None:
         return _FBD_CUDA
 
+    # Skip CUDA extension loading on incompatible systems (like PyTorch 2.10+ with CUDA 12.8)
+    # This avoids hanging during compilation. Falls back to pure PyTorch implementation.
+    import torch
+    if torch.version.cuda and int(torch.version.cuda.split('.')[0]) >= 12:
+        warnings.warn(
+            f"Skipping CUDA extension on CUDA {torch.version.cuda} (PyTorch {torch.__version__}). "
+            "Using pure PyTorch implementation (slower but compatible)."
+        )
+        _FBD_CUDA = None
+        return _FBD_CUDA
+
     # This import initializes cuda context and should thus be local, see issue 1877
     from torch.utils.cpp_extension import load
 

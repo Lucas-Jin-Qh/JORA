@@ -36,6 +36,12 @@ class ModelArguments:
         default="q_proj,k_proj,v_proj,o_proj,down_proj,up_proj,gate_proj",
         metadata={"help": "comma separated list of target modules to apply LoRA layers to"},
     )
+    jora_target_modules: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "comma separated list of target modules to apply JORA layers to. Defaults to q_proj,k_proj,v_proj,o_proj for the selective_diag paper path."
+        },
+    )
     use_peft_jora: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables PEFT JORA for training."},
@@ -65,7 +71,7 @@ class ModelArguments:
         metadata={"help": "Parameter selection type for JORA ('topk_ema', 'random', 'none')."},
     )
     jora_magnitude: Optional[str] = field(
-        default="ecd_tanh",
+        default="none",
         metadata={"help": "Magnitude scaling type for JORA ('ecd_tanh', 'oer_softmax', 'none')."},
     )
     jora_update_interval: Optional[int] = field(
@@ -86,8 +92,8 @@ class ModelArguments:
     )
     # P0 JORA core parameters
     jora_core: Optional[str] = field(
-        default="diag",
-        metadata={"help": "JORA core type ('diag', 'block', 'lowrank')."},
+        default="selective_diag",
+        metadata={"help": "JORA core type ('diag', 'block', 'lowrank', 'selective_diag')."},
     )
     jora_block_size: Optional[int] = field(
         default=4,
@@ -104,6 +110,15 @@ class ModelArguments:
     jora_zero_init_core: Optional[bool] = field(
         default=False,
         metadata={"help": "Zero-initialize JORA core parameters."},
+    )
+    # Paper-path calibration parameters
+    jora_t_stat: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of calibration steps for JORA paper path (EMA collection before support freeze). None = use JoraConfig default."},
+    )
+    jora_pairs_freeze_after_warmup: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Freeze JORA pairs after warmup completes (paper-path one-shot allocation). None = use JoraConfig default."},
     )
     # P0 JORA OER parameters
     jora_oer_temperature: Optional[float] = field(

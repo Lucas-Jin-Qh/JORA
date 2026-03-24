@@ -175,16 +175,21 @@ class JoraModel(BaseTuner):
 
         # Compute selection for representative layer
         representative_layer.update_step(current_step=current_step, total_steps=total_steps)
+        rep_adapter_name = representative_layer.active_adapter
+        rep_adapter = representative_layer.adapters[rep_adapter_name]
 
         # Get the computed selection results
-        computed_pairs_L = representative_layer.adapters['default'].pairs_L.clone()
-        computed_pairs_R = representative_layer.adapters['default'].pairs_R.clone()
-        computed_num_pairs_L = representative_layer.adapters['default'].num_pairs_L.clone()
-        computed_num_pairs_R = representative_layer.adapters['default'].num_pairs_R.clone()
+        computed_pairs_L = rep_adapter.pairs_L.clone()
+        computed_pairs_R = rep_adapter.pairs_R.clone()
+        computed_num_pairs_L = rep_adapter.num_pairs_L.clone()
+        computed_num_pairs_R = rep_adapter.num_pairs_R.clone()
+        computed_pairs_frozen = getattr(rep_adapter, '_pairs_frozen', False)
+        computed_step_idx = rep_adapter.step_idx.clone()
 
         # Apply the same selection to all other layers in the group
         for layer in group[1:]:  # Skip the representative layer
-            adapter = layer.adapters['default']
+            adapter_name = layer.active_adapter
+            adapter = layer.adapters[adapter_name]
 
             # Copy selection results (ensure shape compatibility)
             if adapter.pairs_L.shape == computed_pairs_L.shape:
@@ -195,6 +200,11 @@ class JoraModel(BaseTuner):
                 adapter.num_pairs_L.copy_(computed_num_pairs_L)
             if adapter.num_pairs_R.shape == computed_num_pairs_R.shape:
                 adapter.num_pairs_R.copy_(computed_num_pairs_R)
+            if adapter.step_idx.shape == computed_step_idx.shape:
+                adapter.step_idx.copy_(computed_step_idx)
+
+            adapter._pairs_frozen = computed_pairs_frozen
+            adapter._step_idx_py = int(computed_step_idx.item())
 
             # Update Python-side cache to maintain consistency
             if hasattr(adapter, '_num_pairs_py_initialized'):
@@ -227,6 +237,19 @@ class JoraModel(BaseTuner):
         # Replace supported modules only
         if not hasattr(target, "weight"):
             return
+        # Paper path: selective_diag requires square layers (in_features == out_features).
+        # Rectangular MLP projections (e.g. gate_proj, up_proj, down_proj) are not yet
+        # supported by the paper-exact operator; skip them to avoid silent corruption.
+        if peft_config.core == "selective_diag" and hasattr(target, "in_features") and hasattr(target, "out_features"):
+            if target.in_features != target.out_features:
+                warnings.warn(
+                    f"JORA paper path (core='selective_diag') requires square layers but '{current_key}' "
+                    f"has in_features={target.in_features} != out_features={target.out_features}. "
+                    f"Skipping this module. To include rectangular layers, use a non-selective_diag core.",
+                    UserWarning,
+                    stacklevel=4,
+                )
+                return
         new_module = JoraLayer(base_layer=target, adapter_name=adapter_name, cfg=peft_config)
         setattr(parent, target_name, new_module)
 

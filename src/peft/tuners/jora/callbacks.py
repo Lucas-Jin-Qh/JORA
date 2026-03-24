@@ -47,13 +47,16 @@ class JoraTrainerCallback(TrainerCallback):
         """Initialize callback.
 
         Args:
-            peft_model: The PEFT-wrapped model containing JoraModel
+            peft_model: Initial model reference. The trainer may wrap/replace this
+                model later, so the callback resolves and caches the live JORA model
+                from callback kwargs at train start.
             verbose: If True, log update events
         """
         self.peft_model = peft_model
         self.verbose = verbose
         self._total_steps: Optional[int] = None
         self._initialized = False
+        self._jora_model = None
 
     def _get_jora_model(self):
         """Extract JoraModel from potentially nested PEFT wrapper."""
@@ -110,17 +113,40 @@ class JoraTrainerCallback(TrainerCallback):
 
         return find_jora_model(trainer_model)
 
+    def _resolve_jora_model(self, trainer_model=None):
+        """Resolve the live JoraModel and cache it.
+
+        The trainer may wrap the original model after this callback is constructed
+        (for example via TRL's `prepare_peft_model`). In that case, looking only at
+        `self.peft_model` would miss the actual JORA instance that receives updates.
+        """
+        if self._jora_model is not None:
+            return self._jora_model
+
+        candidates = []
+        if trainer_model is not None:
+            candidates.append(trainer_model)
+        if self.peft_model is not None and self.peft_model is not trainer_model:
+            candidates.append(self.peft_model)
+
+        for candidate in candidates:
+            jora_model = self._find_jora_model_in_trainer(candidate)
+            if jora_model is not None:
+                self._jora_model = jora_model
+                # Keep a reference to the trainer-owned model so later callback events
+                # follow the same wrapped object used for training/saving.
+                self.peft_model = candidate
+                return jora_model
+
+        return None
+
     def on_train_begin(self, args: "TrainingArguments", state: "TrainerState",
                        control: "TrainerControl", **kwargs):
         """Set total steps at training start."""
-        # Try to find JoraModel from the original model first
-        jora_model = self._get_jora_model()
-
-        # If not found, try to find it from trainer (in case model was wrapped)
-        if jora_model is None and hasattr(kwargs.get('model', None), 'modules'):
-            jora_model = self._find_jora_model_in_trainer(kwargs.get('model'))
-        elif jora_model is None and hasattr(state, 'model'):
-            jora_model = self._find_jora_model_in_trainer(state.model)
+        trainer_model = kwargs.get("model", None)
+        jora_model = self._resolve_jora_model(trainer_model)
+        if jora_model is None and hasattr(state, "model"):
+            jora_model = self._resolve_jora_model(state.model)
 
         if jora_model is None:
             logger.warning("JoraTrainerCallback: Could not find JoraModel in model hierarchy")
@@ -153,7 +179,7 @@ class JoraTrainerCallback(TrainerCallback):
         if not self._initialized:
             return
 
-        jora_model = self._get_jora_model()
+        jora_model = self._resolve_jora_model(kwargs.get("model", None))
         if jora_model is None:
             return
 

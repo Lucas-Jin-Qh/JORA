@@ -33,6 +33,8 @@ JORA_K="${JORA_K:-8}"
 JORA_SELECTION="${JORA_SELECTION:-topk_ema}"
 JORA_MAGNITUDE="${JORA_MAGNITUDE:-oer_softmax}"
 JORA_WARMUP="${JORA_WARMUP:-50}"
+JORA_LR_THETA="${JORA_LR_THETA:-$LEARNING_RATE}"
+JORA_LR_CORE="${JORA_LR_CORE:-$LEARNING_RATE}"
 
 # LoRA r=4 for comparison (similar param count as JORA)
 LORA_R=4
@@ -42,6 +44,8 @@ echo "Model: $MODEL_ID"
 echo "Dataset: $DATASET_NAME"
 echo "Steps: $MAX_STEPS, LR: $LEARNING_RATE"
 echo "MMLU samples: ${NUM_EVAL_SAMPLES:-full}"
+echo "JORA_LR_THETA: $JORA_LR_THETA"
+echo "JORA_LR_CORE: $JORA_LR_CORE"
 echo ""
 
 mkdir -p "$WORKDIR"
@@ -51,6 +55,18 @@ ensure_absent() {
     if [ -d "$1" ]; then
         echo "Removing existing $1"
         rm -rf "$1"
+    fi
+}
+
+require_adapter_dir() {
+    local adapter_dir="$1"
+    if [ ! -d "$adapter_dir" ]; then
+        echo "ERROR: adapter directory not found: $adapter_dir"
+        exit 1
+    fi
+    if [ ! -f "$adapter_dir/adapter_config.json" ]; then
+        echo "ERROR: missing adapter_config.json in $adapter_dir"
+        exit 1
     fi
 }
 
@@ -69,7 +85,7 @@ train_jora() {
     ensure_absent "$output_dir"
 
     echo "=== Training JORA magnitude=$magnitude ==="
-    CUDA_VISIBLE_DEVICES=0 "$PYTHON_BIN" examples/sft/train.py \
+    CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" "$PYTHON_BIN" examples/sft/train.py \
         --seed 42 \
         --model_name_or_path "$MODEL_ID" \
         --dataset_name "$DATASET_NAME" \
@@ -102,6 +118,8 @@ train_jora() {
         --jora_selection_type "$JORA_SELECTION" \
         --jora_magnitude "$magnitude" \
         --jora_warmup_steps "$JORA_WARMUP" \
+        --jora_lr_theta "$JORA_LR_THETA" \
+        --jora_lr_core "$JORA_LR_CORE" \
         --lr_scheduler_type cosine \
         --warmup_ratio 0.03
 }
@@ -114,7 +132,7 @@ train_lora() {
 
     local lora_alpha=$((r * 2))
     echo "=== Training LoRA r=$r, alpha=$lora_alpha ==="
-    CUDA_VISIBLE_DEVICES=0 "$PYTHON_BIN" examples/sft/train.py \
+    CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" "$PYTHON_BIN" examples/sft/train.py \
         --seed 42 \
         --model_name_or_path "$MODEL_ID" \
         --dataset_name "$DATASET_NAME" \
@@ -154,7 +172,7 @@ run_mmlu_eval() {
     local num_samples="$3"
 
     echo "=== Evaluating $output_name on MMLU ==="
-    CUDA_VISIBLE_DEVICES=0 "$PYTHON_BIN" - <<EOF
+    CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" "$PYTHON_BIN" - <<EOF
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -174,7 +192,7 @@ model.eval()
 
 # Load MMLU full test set
 from datasets import load_dataset
-ds = load_dataset("mmlu", "all", split="test")
+ds = load_dataset("cais/mmlu", "all", split="test")
 print(f"MMLU test samples: {len(ds)}")
 
 if $num_samples > 0:
@@ -232,10 +250,17 @@ print(f"Saved to $RESULTS_FILE")
 EOF
 }
 
+eval_existing_adapter() {
+    local model_path="$1"
+    local output_name="${2:-$(basename "$model_path")}"
+    require_adapter_dir "$model_path"
+    run_mmlu_eval "$model_path" "$output_name" "$NUM_EVAL_SAMPLES"
+}
+
 # Evaluate base model (no training)
 eval_base() {
     echo "=== Evaluating base model on MMLU ==="
-    CUDA_VISIBLE_DEVICES=0 "$PYTHON_BIN" - <<EOF
+    CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" "$PYTHON_BIN" - <<EOF
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
@@ -251,7 +276,7 @@ tokenizer.pad_token = tokenizer.eos_token
 model.eval()
 
 # Load MMLU
-ds = load_dataset("mmlu", "all", split="test")
+ds = load_dataset("cais/mmlu", "all", split="test")
 if $NUM_EVAL_SAMPLES > 0:
     ds = ds.select(range($NUM_EVAL_SAMPLES))
 print(f"Test samples: {len(ds)}")
@@ -307,17 +332,22 @@ print_help() {
     echo "Usage: $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  jora_oer      - Train JORA oer_softmax"
-    echo "  jora_none     - Train JORA magnitude=none"
-    echo "  lora_r4       - Train LoRA r=4"
-    echo "  base          - Evaluate base model"
-    echo "  all           - Run full comparison"
+    echo "  jora_oer         - Train JORA oer_softmax and evaluate"
+    echo "  jora_none        - Train JORA magnitude=none and evaluate"
+    echo "  lora_r4          - Train LoRA r=4 and evaluate"
+    echo "  base             - Evaluate base model only"
+    echo "  all              - Train all adapters and run full comparison"
+    echo "  eval_jora_oer    - Evaluate existing \$WORKDIR/out_jora_oer"
+    echo "  eval_jora_none   - Evaluate existing \$WORKDIR/out_jora_none"
+    echo "  eval_lora_r4     - Evaluate existing \$WORKDIR/out_lora_r4"
+    echo "  eval_all         - Evaluate base + existing adapters in \$WORKDIR"
+    echo "  eval_existing    - Evaluate an existing adapter path"
     echo ""
     echo "Environment variables:"
-    echo "  MODEL_ID        - Model (default: facebook/opt-350m)"
-    echo "  MAX_STEPS       - Training steps (default: 2000)"
+    echo "  MODEL_ID         - Model (default: facebook/opt-350m)"
+    echo "  MAX_STEPS        - Training steps (default: 2000)"
     echo "  NUM_EVAL_SAMPLES - MMLU samples (0=full, default: 0)"
-    echo "  WORKDIR         - Output directory"
+    echo "  WORKDIR          - Output directory"
 }
 
 case "${1:-}" in
@@ -353,6 +383,38 @@ case "${1:-}" in
         echo ""
         echo "=== FINAL RESULTS ==="
         cat "$RESULTS_FILE"
+        ;;
+    eval_jora_oer)
+        print_summary
+        eval_existing_adapter "$WORKDIR/out_jora_oer" "JORA-oer_softmax"
+        ;;
+    eval_jora_none)
+        print_summary
+        eval_existing_adapter "$WORKDIR/out_jora_none" "JORA-none"
+        ;;
+    eval_lora_r4)
+        print_summary
+        eval_existing_adapter "$WORKDIR/out_lora_r4" "LoRA-r4"
+        ;;
+    eval_all)
+        print_summary
+        rm -f "$RESULTS_FILE"
+        eval_base
+        eval_existing_adapter "$WORKDIR/out_jora_oer" "JORA-oer_softmax"
+        eval_existing_adapter "$WORKDIR/out_jora_none" "JORA-none"
+        eval_existing_adapter "$WORKDIR/out_lora_r4" "LoRA-r4"
+
+        echo ""
+        echo "=== FINAL RESULTS ==="
+        cat "$RESULTS_FILE"
+        ;;
+    eval_existing)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: provide adapter path"
+            exit 1
+        fi
+        print_summary
+        eval_existing_adapter "$2" "${3:-$(basename "$2")}"
         ;;
     help|--help|-h)
         print_help

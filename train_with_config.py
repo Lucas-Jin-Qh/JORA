@@ -109,7 +109,8 @@ def create_training_command(
     torch_dtype: str = "auto",
     gradient_accumulation_steps: int = 8,
     num_gpus: int = 1,
-    deepspeed_config: str = None
+    deepspeed_config: str = None,
+    use_gradient_checkpointing: bool = True
 ) -> str:
     """从PEFT配置文件生成训练命令，支持多GPU分布式训练"""
 
@@ -122,8 +123,13 @@ def create_training_command(
         torch_dtype = "bfloat16"  # JORA uses flash attention, needs efficient dtype
 
     # 构建基础命令
-    # 根据 GPU 数量选择启动方式
-    if num_gpus > 1:
+    # 根据 GPU 数量和 DeepSpeed 配置选择启动方式
+    if deepspeed_config:
+        # 使用 accelerate launch 进行 DeepSpeed 训练
+        cmd_parts = [
+            "accelerate launch --config_file " + deepspeed_config + " examples/sft/train.py",
+        ]
+    elif num_gpus > 1:
         # 使用 torchrun 进行多 GPU 分布式训练
         cmd_parts = [
             f"torchrun --nproc_per_node={num_gpus} examples/sft/train.py",
@@ -132,10 +138,6 @@ def create_training_command(
         cmd_parts = [
             "python examples/sft/train.py",
         ]
-
-    # 添加 DeepSpeed 配置（如果指定）
-    if deepspeed_config:
-        cmd_parts.append(f"--deepspeed {deepspeed_config}")
 
     cmd_parts.extend([
         f"--seed {seed}",
@@ -170,8 +172,23 @@ def create_training_command(
         f"--per_device_train_batch_size {batch_size}",
         f"--gradient_accumulation_steps {gradient_accumulation_steps}",
         "--gradient_checkpointing",
-        "--use_reentrant",
+        "--use_reentrant False",
+    ])
+
+    # 添加 dataset_text_field
+    cmd_parts.extend([
         "--dataset_text_field text"
+    ])
+
+    # DeepSpeed 不兼容 gradient_checkpointing，关闭它
+    if deepspeed_config:
+        # 移除 gradient_checkpointing 参数
+        if "--gradient_checkpointing" in cmd_parts:
+            cmd_parts.remove("--gradient_checkpointing")
+            if "--use_reentrant False" in cmd_parts:
+                cmd_parts.remove("--use_reentrant False")
+    
+    cmd_parts.extend([
     ])
 
     # JORA requires special DDP settings
@@ -186,10 +203,52 @@ def create_training_command(
             f"--jora_s_l {peft_config['S_L']}",
             f"--jora_s_r {peft_config['S_R']}",
             f"--jora_k {peft_config['k']}",
-            f"--jora_rotation_param {peft_config['rotation_param']}",
-            f"--jora_selection_type {peft_config['selection']}",
-            f"--jora_magnitude {peft_config['magnitude']}"
+            f"--jora_rotation_param {peft_config.get('rotation_param', 'cayley')}",
+            f"--jora_selection_type {peft_config.get('selection', 'topk_ema')}",
+            f"--jora_magnitude {peft_config.get('magnitude', 'none')}"
         ])
+
+        # P0 core parameters
+        if 'core' in peft_config:
+            cmd_parts.append(f"--jora_core {peft_config['core']}")
+        if 'block_size' in peft_config:
+            cmd_parts.append(f"--jora_block_size {peft_config['block_size']}")
+        if 'lowrank_r' in peft_config:
+            cmd_parts.append(f"--jora_lowrank_r {peft_config['lowrank_r']}")
+        if 'lowrank_alpha' in peft_config and peft_config['lowrank_alpha'] is not None:
+            cmd_parts.append(f"--jora_lowrank_alpha {peft_config['lowrank_alpha']}")
+        if 'zero_init_core' in peft_config:
+            cmd_parts.append(f"--jora_zero_init_core {str(peft_config['zero_init_core']).lower()}")
+
+        # Paper-path calibration parameters
+        if 't_stat' in peft_config:
+            cmd_parts.append(f"--jora_t_stat {peft_config['t_stat']}")
+        if 'pairs_freeze_after_warmup' in peft_config:
+            cmd_parts.append(f"--jora_pairs_freeze_after_warmup {str(peft_config['pairs_freeze_after_warmup']).lower()}")
+
+        # P0 OER parameters
+        if 'oer_temperature' in peft_config:
+            cmd_parts.append(f"--jora_oer_temperature {peft_config['oer_temperature']}")
+
+        # P0 schedule parameters
+        if 'warmup_steps' in peft_config:
+            cmd_parts.append(f"--jora_warmup_steps {peft_config['warmup_steps']}")
+        if 'warmup_ratio' in peft_config:
+            cmd_parts.append(f"--jora_warmup_ratio {peft_config['warmup_ratio']}")
+        if 'single_sided' in peft_config:
+            cmd_parts.append(f"--jora_single_sided {peft_config['single_sided']}")
+        if 'pairing_strategy' in peft_config:
+            cmd_parts.append(f"--jora_pairing_strategy {peft_config['pairing_strategy']}")
+        if 'ema_beta' in peft_config:
+            cmd_parts.append(f"--jora_ema_beta {peft_config['ema_beta']}")
+        if 'ema_grad_interval' in peft_config:
+            cmd_parts.append(f"--jora_ema_grad_interval {peft_config['ema_grad_interval']}")
+
+        # P0 learning rate parameters
+        if 'lr_theta' in peft_config:
+            cmd_parts.append(f"--jora_lr_theta {peft_config['lr_theta']}")
+        if 'lr_core' in peft_config:
+            cmd_parts.append(f"--jora_lr_core {peft_config['lr_core']}")
 
         # 添加可选的性能优化参数（如果配置文件中有）
         if 'update_interval' in peft_config:
@@ -378,6 +437,7 @@ def main():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="梯度累积步数")
     parser.add_argument("--num_gpus", type=int, default=1, help="使用的GPU数量 (默认: 1, >1 使用分布式训练)")
     parser.add_argument("--deepspeed", type=str, default=None, help="DeepSpeed配置文件路径")
+    parser.add_argument("--use_gradient_checkpointing", type=bool, default=True, help="是否使用梯度检查点")
     parser.add_argument("--execute", action="store_true", help="直接执行命令")
 
     args = parser.parse_args()
@@ -397,6 +457,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_gpus=args.num_gpus,
         deepspeed_config=args.deepspeed,
+        use_gradient_checkpointing=args.use_gradient_checkpointing,
         use_4bit=args.use_4bit,
         use_nested_quant=args.use_nested_quant,
         push_to_hub=args.push_to_hub,

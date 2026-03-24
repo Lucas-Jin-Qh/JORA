@@ -45,17 +45,29 @@ class _JoraAdapterState(nn.Module):
             self.theta_L = None
         else:
             init_std = float(cfg.theta_init_std)
-            if not getattr(cfg, "force_random_rotation_init", True):
+            # Paper path (selective_diag): zero-init theta so adapter starts at identity
+            if cfg.core == "selective_diag":
+                init_std = 0.0
+            elif not getattr(cfg, "force_random_rotation_init", True):
                 init_std = min(init_std, 0.001)
-            self.theta_L = nn.Parameter(init_std * torch.randn(cfg.S_L, device=dev, dtype=dt))
+            if init_std == 0.0:
+                self.theta_L = nn.Parameter(torch.zeros(cfg.S_L, device=dev, dtype=dt))
+            else:
+                self.theta_L = nn.Parameter(init_std * torch.randn(cfg.S_L, device=dev, dtype=dt))
 
         if cfg.S_R == 0:
             self.theta_R = None
         else:
             init_std = float(cfg.theta_init_std)
-            if not getattr(cfg, "force_random_rotation_init", True):
+            # Paper path (selective_diag): zero-init theta so adapter starts at identity
+            if cfg.core == "selective_diag":
+                init_std = 0.0
+            elif not getattr(cfg, "force_random_rotation_init", True):
                 init_std = min(init_std, 0.001)
-            self.theta_R = nn.Parameter(init_std * torch.randn(cfg.S_R, device=dev, dtype=dt))
+            if init_std == 0.0:
+                self.theta_R = nn.Parameter(torch.zeros(cfg.S_R, device=dev, dtype=dt))
+            else:
+                self.theta_R = nn.Parameter(init_std * torch.randn(cfg.S_R, device=dev, dtype=dt))
 
         # Pair buffers (static, shape-invariant for checkpoint/resume)
         # We allocate full capacity [S, 2] and track the active prefix length with num_pairs.
@@ -82,6 +94,16 @@ class _JoraAdapterState(nn.Module):
 
         self.register_buffer("step_idx", torch.zeros((), device=dev, dtype=torch.long), persistent=True)
         self.register_buffer("ema_step_idx", torch.zeros((), device=dev, dtype=torch.long), persistent=True)
+
+        # Paper-path state: pairs_frozen persisted as a buffer so state_dict roundtrip restores it.
+        self.register_buffer(
+            "pairs_frozen_flag",
+            torch.zeros((), dtype=torch.bool, device=dev),
+            persistent=True,
+        )
+        self.register_load_state_dict_post_hook(self._restore_frozen_flag)
+        self._pairs_frozen = False
+        self._step_idx_py = 0
 
         # Magnitude module (row-wise scaling)
         self.ecd_log_mag: Optional[nn.Parameter] = None
@@ -252,40 +274,67 @@ class _JoraAdapterState(nn.Module):
         new_pairs = select_top_k_pairs_gpu(energy, k=allowed_count, max_features=int(feature_dim), pairing_strategy=pairing_strategy)
         self._write_pairs(target_buffer, target_counter, new_pairs, side)
 
+    def _effective_k_allow(self, current_step: int, total_steps: int | None = None) -> int:
+        """Compute active pair budget, honoring paper-path calibration if configured."""
+        total_k = int(self.cfg.k)
+        if total_k <= 0:
+            return 0
+
+        t_stat = int(getattr(self.cfg, "t_stat", 0) or 0)
+        if t_stat > 0:
+            current_step = min(int(current_step), t_stat)
+            warmup_steps = t_stat
+            warmup_ratio = 0.0
+            total_steps = t_stat
+        else:
+            warmup_steps = int(getattr(self.cfg, "warmup_steps", 0) or 0)
+            warmup_ratio = float(getattr(self.cfg, "warmup_ratio", 0.0) or 0.0)
+
+        k_allow = compute_allowed_pairs(total_k, current_step, warmup_steps, warmup_ratio, total_steps)
+        return min(int(k_allow), total_k)
+
     @torch.no_grad()
     def update_step(self, current_step: int, total_steps: int | None = None):
         """Update active pairs based on EMA stats.
 
         Only mutates the *contents* of static buffers and counters (`num_pairs_*`).
         Buffer shapes stay invariant for checkpoint/resume safety.
+
+        For the paper path (pairs_freeze_after_warmup=True): pairs are selected once
+        when warmup completes and frozen thereafter. For SelectiveDiagCore, also calls
+        set_support() to freeze the support indices U.
         """
         if self.cfg.selection == "none":
             return
 
+        # Paper path: freeze pairs after first full allocation
+        if getattr(self.cfg, "pairs_freeze_after_warmup", False):
+            if bool(self.pairs_frozen_flag.item()):
+                return  # Support already frozen; skip re-selection
+
         # Compute warmup ratio for k parameter
-        k_allow = compute_allowed_pairs(self.cfg.k, current_step, self.cfg.warmup_steps, self.cfg.warmup_ratio, total_steps)
-        k_allow = min(int(k_allow), int(self.cfg.k))  # Ensure k_allow <= k
+        self._step_idx_py = max(self._step_idx_py, int(current_step))
+        self.step_idx.fill_(self._step_idx_py)
+        k_allow = self._effective_k_allow(current_step, total_steps)
 
         if self.cfg.selection == "random":
             # For random selection, distribute k pairs between left and right sides
-            # Use equal split, or could be made configurable
             k_per_side = k_allow // 2
             k_L = min(k_per_side, int(self.pairs_L.size(0)))
             k_R = min(k_per_side, int(self.pairs_R.size(0)))
-            # If odd number, give extra to left side
             if k_allow % 2 == 1 and k_L < k_per_side * 2:
                 k_L = min(k_L + 1, int(self.pairs_L.size(0)))
             self.init_random_pairs(n_pairs_L=k_L, n_pairs_R=k_R)
+            # Freeze after first allocation (paper path)
+            if getattr(self.cfg, "pairs_freeze_after_warmup", False) and k_allow >= self.cfg.k:
+                self._freeze_support_if_needed()
             return
 
         # default: topk_ema
-        # Distribute k pairs between left and right sides based on available capacity
         total_capacity = int(self.pairs_L.size(0)) + int(self.pairs_R.size(0))
         if total_capacity > 0:
-            # Proportional allocation based on buffer sizes
             k_L = min(int(k_allow * self.pairs_L.size(0) // total_capacity), int(self.pairs_L.size(0)))
             k_R = min(k_allow - k_L, int(self.pairs_R.size(0)))
-            # Ensure at least some pairs if k_allow > 0
             if k_allow > 0 and k_L == 0 and self.pairs_L.size(0) > 0:
                 k_L = 1
             if k_allow > 0 and k_R == 0 and self.pairs_R.size(0) > 0:
@@ -298,6 +347,56 @@ class _JoraAdapterState(nn.Module):
             self._update_pair_buffer(self.pairs_L, self.num_pairs_L, self.grad_row_ema, k_L, self.n, 'left')
         if self.cfg.S_R > 0 and k_R > 0:
             self._update_pair_buffer(self.pairs_R, self.num_pairs_R, self.grad_col_ema, k_R, self.m, 'right')
+
+        # Freeze after full allocation (paper path)
+        if getattr(self.cfg, "pairs_freeze_after_warmup", False) and k_allow >= self.cfg.k:
+            self._freeze_support_if_needed()
+
+    def _freeze_support_if_needed(self):
+        """Freeze support U for SelectiveDiagCore after calibration (paper-exact path).
+
+        Support is the unique union of all active pair indices. If the union is
+        smaller than the configured capacity we keep a masked tail instead of
+        padding duplicate indices, which avoids parameter aliasing while keeping
+        checkpoint tensor shapes stable.
+        """
+        from .core import SelectiveDiagCore
+        if getattr(self, "_pairs_frozen", False):
+            return
+        if isinstance(self.core, SelectiveDiagCore):
+            n_L = int(self.num_pairs_L.item())
+            n_R = int(self.num_pairs_R.item())
+            indices_parts = []
+            if n_L > 0:
+                indices_parts.append(self.pairs_L[:n_L].reshape(-1))
+            if n_R > 0:
+                indices_parts.append(self.pairs_R[:n_R].reshape(-1))
+
+            if indices_parts:
+                unique_indices = torch.unique(torch.cat(indices_parts))[: self.core.support_size]
+            else:
+                unique_indices = torch.zeros(0, dtype=torch.long, device=self.core.support_indices.device)
+
+            actual_size = int(unique_indices.numel())
+            if actual_size < self.core.support_size:
+                import warnings
+                warnings.warn(
+                    f"JORA: support union has {actual_size} unique indices but support_size="
+                    f"{self.core.support_size}. Keeping a masked tail to avoid duplicate-index aliasing. "
+                    f"Consider increasing k or warmup_steps.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+
+            self.core.set_support(unique_indices)
+        self._pairs_frozen = True
+        self.pairs_frozen_flag.fill_(True)
+
+    def _restore_frozen_flag(self, *_args, **_kwargs) -> None:
+        """Post-hook: restore Python-side _pairs_frozen from the persisted buffer after state_dict load."""
+        self._pairs_frozen = bool(self.pairs_frozen_flag.item())
+
+
 
     def _apply_side_rotation(self, x: Tensor, is_left_side: bool) -> Tensor:
         """Apply one side of the implicit rotation with all safety guards.
@@ -341,22 +440,53 @@ class _JoraAdapterState(nn.Module):
         )
 
     def compute_delta(self, x: Tensor) -> Tensor:
-        """Compute JORA contribution (implicit)."""
-        # 1) Input rotation (Right)
-        x_rot = self._apply_side_rotation(x, is_left_side=False)
+        """Compute JORA contribution (implicit).
 
-        # 2) Core computation
-        y_core = self.core.apply_to_vector(x_rot)
+        Paper-exact formula (when core='selective_diag'):
+            delta = R_L^T @ D_sel @ R_R @ x - P_U @ x
+        where D_sel = I_U + diag(delta) applied only to support U.
 
-        # 3) Output rotation (Left)
-        y = self._apply_side_rotation(y_core, is_left_side=True)
+        Legacy formula (other core types):
+            delta = R_L^T @ core(R_R @ x)  [with optional tanh]
+        """
+        from .core import SelectiveDiagCore
 
-        # Soft clipping to prevent gradient explosion while maintaining smoothness
-        # Use tanh for smooth (-1, 1) bounding instead of hard clamping
-        if not getattr(self.cfg, "zero_init_core", False):
-            y = torch.tanh(y)
-
-        return y
+        if isinstance(self.core, SelectiveDiagCore):
+            # Paper-exact path: R_L^T @ D_sel @ R_R @ x - P_U @ x
+            # where D_sel = I_U + diag(delta).
+            #
+            # At delta=0: D_sel = I_U, so:
+            #   R_L^T I_U R_R x - P_U x
+            # This is NOT zero in general, but when theta=0 (R_L=R_R=I), it is
+            #   P_U x - P_U x = 0.  ✓
+            #
+            # Crucially, only ONE term (y_rotated) depends on theta_L/theta_R,
+            # so their gradients flow even at delta=0.  This fixes the gradient-dead
+            # theta-at-init problem that occurs when both terms depend on theta.
+            #
+            # 1) Input rotation (Right): R_R @ x
+            x_rot = self._apply_side_rotation(x, is_left_side=False)
+            # 2) D_sel applied to rotated input: D_sel @ R_R @ x
+            y_sel = self.core.apply_to_vector(x_rot)
+            # 3) Output rotation (Left): R_L^T @ D_sel @ R_R @ x
+            y_rotated = self._apply_side_rotation(y_sel, is_left_side=True)
+            # 4) Subtract P_U @ x in the ORIGINAL (unrotated) input space.
+            #    This differs from R_L^T P_U R_R x: only y_rotated depends on theta,
+            #    so theta gradients are nonzero even at delta=0 (once support is set).
+            proj_x = self.core.project_support(x)  # P_U @ x  (support indices applied to x)
+            return y_rotated - proj_x
+        else:
+            # Legacy path
+            # 1) Input rotation (Right)
+            x_rot = self._apply_side_rotation(x, is_left_side=False)
+            # 2) Core computation
+            y_core = self.core.apply_to_vector(x_rot)
+            # 3) Output rotation (Left)
+            y = self._apply_side_rotation(y_core, is_left_side=True)
+            # Soft clipping to prevent gradient explosion while maintaining smoothness
+            if not getattr(self.cfg, "zero_init_core", False):
+                y = torch.tanh(y)
+            return y
 
     def maybe_apply_magnitude(self, out: Tensor) -> Tensor:
         mag = getattr(self.cfg, "magnitude", "none")
@@ -507,8 +637,10 @@ class JoraLayer(nn.Module, BaseTunerLayer):
             return base_out
 
         delta = st.compute_delta(x)
+        # OER/ECD scales delta only (not the full output).
+        # Forward: y = W₀x + scale ⊙ delta(x)
+        delta = st.maybe_apply_magnitude(delta)
         out = base_out + delta
-        out = st.maybe_apply_magnitude(out)
 
         # Ensure output dtype matches input dtype for compatibility
         if out.dtype != x.dtype:
@@ -668,37 +800,64 @@ class JoraLayer(nn.Module, BaseTunerLayer):
 
     def _compute_weight_delta_simple(self, adapter_state) -> torch.Tensor:
         """
-        Compute the weight delta using mathematically principled approximation.
+        Compute the weight delta for merging.
 
-        JORA transformation: delta = tanh(R_L @ core(R_R @ x))
-        For merge, we need: ΔW @ x ≈ tanh(R_L @ core(R_R @ x))
+        For SelectiveDiagCore (paper-exact path), build the dense linear operator
+        exactly by probing the adapter with basis vectors and converting the
+        resulting map into the base-layer weight layout. This matches the current
+        forward path even when theta is nonzero and avoids hand-derived transpose
+        mistakes between row-vector rotations and weight-matrix conventions.
 
-        This implementation uses a rigorous but conservative approach:
-        1. Extract core transformation matrix
-        2. Estimate rotation effects on each dimension using small-angle approximation
-        3. Combine effects with very conservative scaling for non-linearity
-
-        Args:
-            adapter_state: The JORA adapter state
-
-        Returns:
-            torch.Tensor: Weight delta matrix of shape (n_out, n_in)
+        For other core types (legacy approximation):
+            Uses conservative matrix approximation.
         """
-        device = adapter_state.core.A.device if hasattr(adapter_state.core, 'A') else adapter_state.grad_row_ema.device
-        dtype = adapter_state.core.A.dtype if hasattr(adapter_state.core, 'A') else adapter_state.grad_row_ema.dtype
+        from .core import SelectiveDiagCore
 
+        device = adapter_state.grad_row_ema.device
+        dtype = adapter_state.grad_row_ema.dtype
         n_out, n_in = adapter_state.n, adapter_state.m
 
-        # Use a mathematically principled but conservative approximation
-        # JORA: delta = tanh(R_L @ core(R_R @ x))
-        # For merge: ΔW @ x ≈ tanh(R_L @ core(R_R @ x))
+        if isinstance(adapter_state.core, SelectiveDiagCore):
+            from .utils import is_conv1d_layer
+
+            if n_out != n_in:
+                raise ValueError(
+                    "SelectiveDiagCore merge is only supported for square layers "
+                    f"(got out_features={n_out}, in_features={n_in})."
+                )
+
+            n_active = getattr(adapter_state.core, "_active_support_size_py", 0)
+            if n_active <= 0:
+                base_layer = self.get_base_layer()
+                return torch.zeros_like(base_layer.weight.data, device=device, dtype=dtype)
+
+            base_layer = self.get_base_layer()
+            is_conv1d = is_conv1d_layer(base_layer)
+            delta_weight = torch.zeros_like(base_layer.weight.data, device=device, dtype=dtype)
+
+            chunk_size = min(256, n_in)
+            for start in range(0, n_in, chunk_size):
+                end = min(start + chunk_size, n_in)
+                basis = torch.zeros(end - start, n_in, device=device, dtype=dtype)
+                local_rows = torch.arange(end - start, device=device)
+                basis_indices = torch.arange(start, end, device=device)
+                basis[local_rows, basis_indices] = 1.0
+
+                delta_chunk = adapter_state.compute_delta(basis).to(dtype)
+
+                if is_conv1d:
+                    delta_weight[start:end, :] = delta_chunk
+                else:
+                    delta_weight[:, start:end] = delta_chunk.transpose(0, 1)
+
+            return delta_weight
+
+        # Legacy path: conservative approximation
+        device = adapter_state.core.A.device if hasattr(adapter_state.core, 'A') else device
+        dtype = adapter_state.core.A.dtype if hasattr(adapter_state.core, 'A') else dtype
 
         # Extract core transformation matrix
         core_matrix = adapter_state.core.forward()  # (n_out, n_in)
-
-        # Apply conservative scaling to account for:
-        # 1. Rotation effects (approximated as small perturbations)
-        # 2. Non-linear tanh activation (limits output magnitude)
 
         # Estimate rotation effect magnitude from active parameters
         rotation_scale = self._estimate_rotation_effect_magnitude(adapter_state)
@@ -707,7 +866,6 @@ class JoraLayer(nn.Module, BaseTunerLayer):
         delta_weight = core_matrix * rotation_scale
 
         # Apply very conservative scaling for tanh non-linearity
-        # tanh(x) ≈ x for small x, but we use 0.05 to be extremely conservative
         delta_weight *= 0.05
 
         return delta_weight

@@ -1,10 +1,97 @@
 from __future__ import annotations
 
 import warnings
+from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch import Tensor
+
+
+class SelectiveDiagCore(nn.Module):
+    """Proposed JORA core: diagonal applied ONLY to a fixed support U of size |U|.
+
+    This is the paper-path core. It stores a maximum of |U| trainable parameters
+    (`delta`) and tracks how many support entries are actually active after
+    calibration. At inference it computes:
+        y[U_active] = x[U_active] * (1 + delta[:|U_active|])
+        y[~U_active] = 0
+
+    The caller (compute_delta) then computes:
+        delta = R_L^T @ y - P_U @ x
+    which equals R_L^T @ D_sel @ R_R @ x - P_U @ x for the active support.
+
+    At allocation, delta=0 and theta=0 so the whole adapter starts at
+    zero-function change.
+    """
+
+    def __init__(self, support_size: int, device, dtype):
+        super().__init__()
+        self.support_size = int(support_size)
+        self.delta = nn.Parameter(torch.zeros(self.support_size, device=device, dtype=dtype))
+        self.register_buffer("support_indices", torch.zeros(self.support_size, dtype=torch.long, device=device))
+        self.register_buffer("active_support_size", torch.zeros((), dtype=torch.long, device=device))
+        self._active_support_size_py = 0
+        self.register_load_state_dict_post_hook(self._sync_runtime_state)
+
+    def _sync_runtime_state(self, *_args, **_kwargs) -> None:
+        self._active_support_size_py = int(self.active_support_size.item())
+
+    def set_support(self, indices: Tensor) -> None:
+        """Set the support indices U after calibration.
+
+        Accepts any number of unique indices up to `support_size`. When fewer than
+        `support_size` indices are available we keep a masked tail instead of
+        padding with duplicates, which avoids aliasing multiple delta parameters
+        onto the same feature.
+        """
+        indices = indices.to(device=self.support_indices.device, dtype=torch.long).reshape(-1)
+        assert indices.numel() <= self.support_size, (
+            f"Expected at most {self.support_size} indices, got {indices.numel()}"
+        )
+        if indices.numel() > 0:
+            assert torch.unique(indices).numel() == indices.numel(), "Support indices must be unique"
+
+        self.support_indices.zero_()
+        n_active = int(indices.numel())
+        if n_active > 0:
+            self.support_indices[:n_active].copy_(indices)
+        self.active_support_size.fill_(n_active)
+        self._active_support_size_py = n_active
+
+        if n_active < self.support_size:
+            with torch.no_grad():
+                self.delta[n_active:].zero_()
+
+    def apply_to_vector(self, x: Tensor) -> Tensor:
+        """Apply D_sel = I_U + diag(delta) to x, returning a vector of the same dim as x."""
+        n_active = self._active_support_size_py
+        y = torch.zeros_like(x)
+        if n_active <= 0:
+            return y
+        u = self.support_indices[:n_active]
+        # Keep the support scaling in the same dtype/device as the activation.
+        # In bf16 training, `1.0 + delta` can promote to float and break indexed writes
+        # back into `y`, which is allocated with `zeros_like(x)`.
+        delta = self.delta[:n_active].to(device=x.device, dtype=x.dtype)
+        scale = torch.ones_like(delta) + delta
+        y[..., u] = x[..., u] * scale
+        return y
+
+    def project_support(self, x: Tensor) -> Tensor:
+        """Apply projection P_U (identity on active support, zero elsewhere)."""
+        n_active = self._active_support_size_py
+        y = torch.zeros_like(x)
+        if n_active <= 0:
+            return y
+        u = self.support_indices[:n_active]
+        y[..., u] = x[..., u]
+        return y
+
+    @property
+    def num_params(self) -> int:
+        return self.support_size
+
 
 class DiagCore(nn.Module):
     """Diagonal core D (stored as its diagonal)."""
@@ -202,8 +289,12 @@ class LowRankCore(nn.Module):
             raise ValueError("lowrank_r must be > 0")
 
         if zero_init:
+            # Preserve an exact zero operator at init without deadlocking both factors.
+            # Setting A=B=0 makes y=0, but also makes grad_A=grad_B=0 forever.
+            # Match LoRA-style init instead: keep the "up" factor zero and the
+            # "down" factor random so the first backward step can update A.
             A = torch.zeros(self.n, self.r, device=device, dtype=dtype)
-            B = torch.zeros(self.m, self.r, device=device, dtype=dtype)
+            B = 0.1 * torch.randn(self.m, self.r, device=device, dtype=dtype)
         else:
             A = 0.1 * torch.randn(self.n, self.r, device=device, dtype=dtype)
             B = 0.1 * torch.randn(self.m, self.r, device=device, dtype=dtype)
@@ -224,6 +315,11 @@ class LowRankCore(nn.Module):
         return self.scaling * y
 
 def build_core(core_type: str, n: int, m: int, device, dtype, cfg) -> nn.Module:
+    if core_type == "selective_diag":
+        # Paper-exact core: stores only |U| = k*2 params, applies to support indices U only.
+        # support_indices must be set via set_support() after calibration.
+        support_size = int(getattr(cfg, "k", 8)) * 2  # k pairs -> 2k support indices
+        return SelectiveDiagCore(support_size=support_size, device=device, dtype=dtype)
     if core_type == "diag":
         return DiagCore(n, m, device=device, dtype=dtype, zero_init=getattr(cfg, "zero_init_core", False))
     if core_type == "block":
