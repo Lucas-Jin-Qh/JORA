@@ -31,6 +31,13 @@ class _JoraAdapterState(nn.Module):
         self.n = out_features
         self.cfg = cfg
 
+        if cfg.core == "selective_diag" and self.m != self.n:
+            raise ValueError(
+                "SelectiveDiagCore currently requires square target layers, "
+                f"but got in_features={self.m}, out_features={self.n} for {base_layer.__class__.__name__}. "
+                "Use square targets such as GPT-2 attn.c_proj or choose a non-selective JORA core."
+            )
+
         dev = base_layer.weight.device
         dt = base_layer.weight.dtype
 

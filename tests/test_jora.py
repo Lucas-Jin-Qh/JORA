@@ -18,11 +18,13 @@ import torch.nn as nn
 from datasets import Dataset
 from safetensors import safe_open
 from transformers import OPTConfig, AutoModelForCausalLM, Trainer, TrainingArguments
+from transformers.pytorch_utils import Conv1D
 from transformers.trainer_callback import TrainerControl, TrainerState
 
 from peft import JoraConfig, PeftModel, get_peft_model, get_peft_config_from_string
 from peft.tuners.jora.callbacks import JoraTrainerCallback
 from peft.tuners.jora.core import BlockCore, LowRankCore
+from peft.tuners.jora.layer import JoraLayer
 from peft.tuners.jora.magnitude import compute_oer_scale_softmax
 from peft.tuners.jora.rotation import TRITON_AVAILABLE, apply_rotations, apply_rotations_torch
 from peft.tuners.jora.selection import select_top_k_pairs_gpu
@@ -118,6 +120,12 @@ class TestJora:
         assert config.S_L == 8
         assert config.S_R == 8
         assert config.k == 4
+
+    def test_selective_diag_rejects_non_square_conv1d_layers(self):
+        cfg = JoraConfig.paper_path(target_modules=["attn.c_attn"], S_L=8, S_R=8, k=4)
+
+        with pytest.raises(ValueError, match="requires square target layers"):
+            JoraLayer(Conv1D(96, 32), "default", cfg)
 
     def test_jora_config_from_string(self):
         """Test JORA config creation from string."""

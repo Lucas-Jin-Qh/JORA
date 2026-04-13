@@ -38,19 +38,37 @@ LEGACY_FORMAL_HF_HOME = REPO_ROOT / "formal_runs" / "three_gpu_bf16" / "hf_home"
 LEGACY_FORMAL_HF_DATASETS_CACHE = REPO_ROOT / "formal_runs" / "three_gpu_bf16" / "hf_datasets"
 MISTRAL_7B_MODEL_ID = "mistralai/Mistral-7B-v0.1"
 LOCAL_MISTRAL_7B_PATH = Path("/mnt/sda/jqh/pretrained_checkpoints/Mistral-7B-v0.1")
+GPT2_LARGE_MODEL_ID = "gpt2-large"
+LOCAL_GPT2_LARGE_PATH = Path("/mnt/sda/jqh/pretrained_checkpoints/gpt2-large")
+GPT2_XL_MODEL_ID = "gpt2-xl"
+LOCAL_GPT2_XL_PATH = Path("/mnt/sda/jqh/pretrained_checkpoints/gpt2-xl")
 RETRYABLE_LAUNCH_FILES = {"run_spec.json", "run_command.sh"}
 COMMON_DATASET = "yahma/alpaca-cleaned"
-COMMON_TARGET_MODULES = "q_proj,o_proj"
+OPT_TARGET_MODULES = "q_proj,o_proj"
+MISTRAL_TARGET_MODULES = "q_proj,o_proj"
+# GPT-2 attention uses merged qkv projections (`c_attn`) that are non-square.
+# The current paper-path SelectiveDiagCore only supports square target layers,
+# so the GPT-2 minimal runnable profile uses the square attention output proj.
+GPT2_TARGET_MODULES = "attn.c_proj"
 DEFAULT_JORA_LR_THETA = 5e-3
 DEFAULT_JORA_LR_CORE = 1e-3
 SAME_BUDGET_TOLERANCE = 0.15
 
 
 @dataclass(frozen=True)
+class ModelProfile:
+    name: str
+    model_name_or_path: str
+    target_modules: str
+
+
+@dataclass(frozen=True)
 class TrainSpec:
     name: str
     description: str
+    model_profile: str
     model_name_or_path: str
+    target_modules: str
     output_subdir: str
     learning_rate: float
     per_device_train_batch_size: int
@@ -88,19 +106,72 @@ def _format_float_token(value: float) -> str:
     return f"{value:g}".replace("+", "")
 
 
+def _local_model_name_or_path(local_path: Path, fallback_model_id: str) -> str:
+    if local_path.exists():
+        return str(local_path)
+    return fallback_model_id
+
+
 def default_mistral_model_name_or_path() -> str:
-    if LOCAL_MISTRAL_7B_PATH.exists():
-        return str(LOCAL_MISTRAL_7B_PATH)
-    return MISTRAL_7B_MODEL_ID
+    return _local_model_name_or_path(LOCAL_MISTRAL_7B_PATH, MISTRAL_7B_MODEL_ID)
+
+
+def default_gpt2_large_model_name_or_path() -> str:
+    return _local_model_name_or_path(LOCAL_GPT2_LARGE_PATH, GPT2_LARGE_MODEL_ID)
+
+
+def default_gpt2_xl_model_name_or_path() -> str:
+    return _local_model_name_or_path(LOCAL_GPT2_XL_PATH, GPT2_XL_MODEL_ID)
+
+
+def model_profiles() -> dict[str, ModelProfile]:
+    return {
+        "opt-350m": ModelProfile(
+            name="opt-350m",
+            model_name_or_path="facebook/opt-350m",
+            target_modules=OPT_TARGET_MODULES,
+        ),
+        "mistral-7b": ModelProfile(
+            name="mistral-7b",
+            model_name_or_path=default_mistral_model_name_or_path(),
+            target_modules=MISTRAL_TARGET_MODULES,
+        ),
+        "gpt2-large": ModelProfile(
+            name="gpt2-large",
+            model_name_or_path=default_gpt2_large_model_name_or_path(),
+            target_modules=GPT2_TARGET_MODULES,
+        ),
+        "gpt2-xl": ModelProfile(
+            name="gpt2-xl",
+            model_name_or_path=default_gpt2_xl_model_name_or_path(),
+            target_modules=GPT2_TARGET_MODULES,
+        ),
+    }
+
+
+def model_profile_names() -> list[str]:
+    return sorted(model_profiles())
+
+
+def resolve_model_profile(profile_name: str) -> ModelProfile:
+    profiles = model_profiles()
+    try:
+        return profiles[profile_name]
+    except KeyError as exc:
+        choices = ", ".join(sorted(profiles))
+        raise KeyError(f"Unknown model profile '{profile_name}'. Expected one of: {choices}") from exc
 
 
 def _base_named_specs() -> dict[str, TrainSpec]:
-    mistral_model = default_mistral_model_name_or_path()
+    opt_profile = resolve_model_profile("opt-350m")
+    mistral_profile = resolve_model_profile("mistral-7b")
     return {
         "m0_jora": TrainSpec(
             name="m0_jora",
             description="OPT-350M sanity run for paper-path JORA on q_proj,o_proj.",
-            model_name_or_path="facebook/opt-350m",
+            model_profile=opt_profile.name,
+            model_name_or_path=opt_profile.model_name_or_path,
+            target_modules=opt_profile.target_modules,
             output_subdir="m0/jora_base_seed42",
             max_steps=500,
             learning_rate=1e-4,
@@ -113,7 +184,9 @@ def _base_named_specs() -> dict[str, TrainSpec]:
         "m0_lora_r1": TrainSpec(
             name="m0_lora_r1",
             description="OPT-350M sanity run for LoRA-r1 on q_proj,o_proj.",
-            model_name_or_path="facebook/opt-350m",
+            model_profile=opt_profile.name,
+            model_name_or_path=opt_profile.model_name_or_path,
+            target_modules=opt_profile.target_modules,
             output_subdir="m0/lora_r1_seed42",
             max_steps=500,
             learning_rate=2e-4,
@@ -128,7 +201,9 @@ def _base_named_specs() -> dict[str, TrainSpec]:
         "m2a_jora": TrainSpec(
             name="m2a_jora",
             description="Mistral-7B pure-bf16 feasibility probe for JORA-base.",
-            model_name_or_path=mistral_model,
+            model_profile=mistral_profile.name,
+            model_name_or_path=mistral_profile.model_name_or_path,
+            target_modules=mistral_profile.target_modules,
             output_subdir="m2a/jora_base_seed42",
             max_steps=100,
             learning_rate=1e-4,
@@ -144,7 +219,9 @@ def _base_named_specs() -> dict[str, TrainSpec]:
         "m2a_lora_r1": TrainSpec(
             name="m2a_lora_r1",
             description="Mistral-7B pure-bf16 feasibility probe for LoRA-r1.",
-            model_name_or_path=mistral_model,
+            model_profile=mistral_profile.name,
+            model_name_or_path=mistral_profile.model_name_or_path,
+            target_modules=mistral_profile.target_modules,
             output_subdir="m2a/lora_r1_seed42",
             max_steps=100,
             learning_rate=2e-4,
@@ -162,7 +239,9 @@ def _base_named_specs() -> dict[str, TrainSpec]:
         "m2b_jora": TrainSpec(
             name="m2b_jora",
             description="Mistral-7B single-seed anchor run for JORA-base.",
-            model_name_or_path=mistral_model,
+            model_profile=mistral_profile.name,
+            model_name_or_path=mistral_profile.model_name_or_path,
+            target_modules=mistral_profile.target_modules,
             output_subdir="m2b/jora_base_seed42",
             max_steps=2000,
             learning_rate=1e-4,
@@ -178,7 +257,9 @@ def _base_named_specs() -> dict[str, TrainSpec]:
         "m2b_lora_r1": TrainSpec(
             name="m2b_lora_r1",
             description="Mistral-7B single-seed anchor run for LoRA-r1.",
-            model_name_or_path=mistral_model,
+            model_profile=mistral_profile.name,
+            model_name_or_path=mistral_profile.model_name_or_path,
+            target_modules=mistral_profile.target_modules,
             output_subdir="m2b/lora_r1_seed42",
             max_steps=2000,
             learning_rate=2e-4,
@@ -196,7 +277,9 @@ def _base_named_specs() -> dict[str, TrainSpec]:
         "m2b_lora_r2": TrainSpec(
             name="m2b_lora_r2",
             description="Mistral-7B single-seed anchor run for LoRA-r2.",
-            model_name_or_path=mistral_model,
+            model_profile=mistral_profile.name,
+            model_name_or_path=mistral_profile.model_name_or_path,
+            target_modules=mistral_profile.target_modules,
             output_subdir="m2b/lora_r2_seed42",
             max_steps=2000,
             learning_rate=2e-4,
@@ -214,7 +297,9 @@ def _base_named_specs() -> dict[str, TrainSpec]:
         "m2b_fixed_jora": TrainSpec(
             name="m2b_fixed_jora",
             description="Mistral-7B single-seed fixed-slot baseline via random frozen support.",
-            model_name_or_path=mistral_model,
+            model_profile=mistral_profile.name,
+            model_name_or_path=mistral_profile.model_name_or_path,
+            target_modules=mistral_profile.target_modules,
             output_subdir="m2b/jora_fixed_random_seed42",
             max_steps=2000,
             learning_rate=1e-4,
@@ -232,6 +317,7 @@ def _base_named_specs() -> dict[str, TrainSpec]:
 
 
 def _m1_sweep_specs() -> list[TrainSpec]:
+    opt_profile = resolve_model_profile("opt-350m")
     specs = []
     lr_theta_values = [1e-3, 5e-3, 1e-2, 5e-2]
     lr_core_values = [5e-4, 1e-3, 5e-3]
@@ -243,7 +329,9 @@ def _m1_sweep_specs() -> list[TrainSpec]:
             TrainSpec(
                 name=name,
                 description="OPT-350M LR screening run for paper-path JORA on q_proj,o_proj.",
-                model_name_or_path="facebook/opt-350m",
+                model_profile=opt_profile.name,
+                model_name_or_path=opt_profile.model_name_or_path,
+                target_modules=opt_profile.target_modules,
                 output_subdir=f"m1/{name}_seed42",
                 max_steps=500,
                 learning_rate=1e-4,
@@ -267,8 +355,15 @@ def _apply_overrides(spec: TrainSpec, args: argparse.Namespace) -> TrainSpec:
     updates = {}
     if args.seed is not None:
         updates["seed"] = args.seed
+    if args.model_profile is not None:
+        profile = resolve_model_profile(args.model_profile)
+        updates["model_profile"] = profile.name
+        updates["model_name_or_path"] = profile.model_name_or_path
+        updates["target_modules"] = profile.target_modules
     if args.model_name_or_path is not None:
         updates["model_name_or_path"] = args.model_name_or_path
+    if args.target_modules is not None:
+        updates["target_modules"] = args.target_modules
     if args.dataset_name is not None:
         updates["dataset_name"] = args.dataset_name
     if args.max_steps is not None:
@@ -306,6 +401,8 @@ def build_train_command(spec: TrainSpec, output_dir: Path, python_bin: str) -> l
             f"TrainSpec {spec.name} must set exactly one of max_steps or num_train_epochs, "
             f"got max_steps={spec.max_steps} num_train_epochs={spec.num_train_epochs}."
         )
+    if not spec.target_modules:
+        raise ValueError(f"TrainSpec {spec.name} must set target_modules.")
 
     command = [
         python_bin,
@@ -387,7 +484,7 @@ def build_train_command(spec: TrainSpec, output_dir: Path, python_bin: str) -> l
                 "--jora_core",
                 spec.jora_core,
                 "--jora_target_modules",
-                COMMON_TARGET_MODULES,
+                spec.target_modules,
                 "--jora_magnitude",
                 spec.jora_magnitude,
                 "--jora_t_stat",
@@ -425,7 +522,7 @@ def build_train_command(spec: TrainSpec, output_dir: Path, python_bin: str) -> l
                 "--use_peft_lora",
                 "True",
                 "--lora_target_modules",
-                COMMON_TARGET_MODULES,
+                spec.target_modules,
                 "--lora_r",
                 str(spec.lora_r),
                 "--lora_alpha",
@@ -482,11 +579,16 @@ def build_env(workdir: Path, hf_endpoint: str | None) -> dict[str, str]:
     env.setdefault("HF_HOME", str(shared_hf_home_path()))
     env.setdefault("HF_DATASETS_CACHE", str(shared_hf_datasets_cache_path()))
     env.setdefault("HF_HUB_DISABLE_XET", "1")
+    env.setdefault("HF_DATASETS_OFFLINE", "1")
+    env.setdefault("HF_HUB_OFFLINE", "1")
+    env.setdefault("TRANSFORMERS_OFFLINE", "1")
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
+    env["MPLCONFIGDIR"] = str(workdir / "mplconfig")
     if hf_endpoint:
         env["HF_ENDPOINT"] = hf_endpoint
     Path(env["HF_HOME"]).mkdir(parents=True, exist_ok=True)
     Path(env["HF_DATASETS_CACHE"]).mkdir(parents=True, exist_ok=True)
+    Path(env["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
     return env
 
 
@@ -495,7 +597,8 @@ def write_manifest(output_dir: Path, spec: TrainSpec, command: list[str], env: d
     manifest = {
         "spec": asdict(spec),
         "claim_scope": {
-            "target_modules": COMMON_TARGET_MODULES,
+            "model_profile": spec.model_profile,
+            "target_modules": spec.target_modules,
             "same_budget_tolerance": SAME_BUDGET_TOLERANCE,
             "dtype": "bfloat16",
             "uses_quantization": False,
@@ -508,7 +611,11 @@ def write_manifest(output_dir: Path, spec: TrainSpec, command: list[str], env: d
             "HF_HOME": env.get("HF_HOME"),
             "HF_DATASETS_CACHE": env.get("HF_DATASETS_CACHE"),
             "HF_HUB_DISABLE_XET": env.get("HF_HUB_DISABLE_XET"),
+            "HF_DATASETS_OFFLINE": env.get("HF_DATASETS_OFFLINE"),
+            "HF_HUB_OFFLINE": env.get("HF_HUB_OFFLINE"),
             "HF_ENDPOINT": env.get("HF_ENDPOINT"),
+            "MPLCONFIGDIR": env.get("MPLCONFIGDIR"),
+            "TRANSFORMERS_OFFLINE": env.get("TRANSFORMERS_OFFLINE"),
         },
     }
     (output_dir / "run_spec.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -521,7 +628,11 @@ def write_manifest(output_dir: Path, spec: TrainSpec, command: list[str], env: d
         f"export HF_HOME={shlex.quote(env['HF_HOME'])}",
         f"export HF_DATASETS_CACHE={shlex.quote(env['HF_DATASETS_CACHE'])}",
         f"export HF_HUB_DISABLE_XET={shlex.quote(env['HF_HUB_DISABLE_XET'])}",
+        f"export HF_DATASETS_OFFLINE={shlex.quote(env['HF_DATASETS_OFFLINE'])}",
+        f"export HF_HUB_OFFLINE={shlex.quote(env['HF_HUB_OFFLINE'])}",
+        f"export TRANSFORMERS_OFFLINE={shlex.quote(env['TRANSFORMERS_OFFLINE'])}",
         f"export TOKENIZERS_PARALLELISM={shlex.quote(env['TOKENIZERS_PARALLELISM'])}",
+        f"export MPLCONFIGDIR={shlex.quote(env['MPLCONFIGDIR'])}",
     ]
     if env.get("HF_ENDPOINT"):
         export_lines.append(f"export HF_ENDPOINT={shlex.quote(env['HF_ENDPOINT'])}")
@@ -535,7 +646,9 @@ def add_common_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--python-bin", default=sys.executable)
     parser.add_argument("--hf-endpoint")
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--model-profile", choices=model_profile_names())
     parser.add_argument("--model-name-or-path")
+    parser.add_argument("--target-modules")
     parser.add_argument("--dataset-name")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--num-train-epochs", type=float)

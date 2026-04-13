@@ -1,9 +1,9 @@
 {
-  "round": 5,
-  "threadId": "019d06b8-9103-7ba0-8ff0-f2228668fa6f",
-  "status": "completed",
-  "last_score": 9.0,
-  "last_verdict": "READY",
-  "pending_experiments": [],
-  "timestamp": "2026-03-20T10:00:00+08:00"
+  "round": 7,
+  "threadId": "019d8612-c29d-7b52-9e16-6b7aa6e228c3",
+  "status": "in_progress",
+  "last_score": 6.0,
+  "last_verdict": "not ready",
+  "pending_experiments": ["abl_diag_norot", "boft_mistral_seed42_eval", "second_backbone_missing"],
+  "timestamp": "2026-04-13T19:46:47+08:00"
 }

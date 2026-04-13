@@ -76,12 +76,18 @@ def test_build_anchor_and_appendix_specs_are_full_epoch():
     selected_shape = phase3.ShapeCandidate(tag="s96_k16", s_l=96, s_r=96, k=16)
 
     anchor_specs = phase3.build_anchor_specs(selected_shape, best_theta=1e-3, best_core=5e-4, seed=1337, num_train_epochs=3.0)
+    all_anchor_specs = phase3.build_all_anchor_specs(selected_shape, best_theta=1e-3, best_core=5e-4, num_train_epochs=3.0)
     appendix_specs = phase3.build_appendix_core_specs(best_theta=1e-3, best_core=5e-4, num_train_epochs=3.0)
 
     assert [spec.name for spec in anchor_specs] == [
         "anchor_jora_s96_k16_seed1337",
         "anchor_lora_r1_seed1337",
         "anchor_lora_r2_seed1337",
+    ]
+    assert [spec.name for spec in all_anchor_specs[:3]] == [
+        "anchor_jora_s96_k16_seed42",
+        "anchor_jora_s96_k16_seed1337",
+        "anchor_jora_s96_k16_seed2026",
     ]
     assert all(spec.num_train_epochs == 3.0 for spec in anchor_specs)
     assert all(spec.save_strategy == "epoch" for spec in anchor_specs)

@@ -330,3 +330,168 @@ All PEFT state dict roundtrip tests PASS
 1. Clarify `t_stat` docstring in `config.py` — it acts as scheduling/freeze control, not a full "no optimizer step" calibration phase.
 2. Add explicit single-process scope note to README / paper.
 3. Future work: add cross-rank EMA all-reduce before pair selection for multi-GPU support.
+
+---
+
+## Round 6 (2026-04-13T14:30:00+08:00) — Empirical Story Review
+
+### Assessment (Summary)
+- Score: 5/10
+- Verdict: NOT READY
+- Key criticisms:
+  1. Baseline credibility too weak — only LoRA-r1/r2 compared; `LoRA-r2 < LoRA-r1` makes reviewers suspect under-tuning.
+  2. No mechanism ablation — no no-rotation control to prove gains come from learned rotation spaces.
+  3. External validity too narrow — one backbone (Mistral-7B), one dataset, three evals.
+  4. Effect size modest (+0.007 over LoRA-r1), mostly GSM8K; no significance analysis reported.
+  5. Paper story split between JORA-diag and JORA-s96k16 — needs to pick a lead claim.
+  6. Novelty positioning vulnerable in crowded rotation-based PEFT space.
+
+### Reviewer Raw Response
+
+<details>
+<summary>Click to expand full reviewer response</summary>
+
+**Verdict**
+
+Score: **5/10** for a top venue in its current form.
+
+State clearly: **No, this is not ready for NeurIPS submission today.**
+It looks like a strong internal result and a plausible workshop paper. It is not yet a borderline-accept NeurIPS package.
+
+**Critical Weaknesses**
+
+1. **Baseline credibility is not strong enough**
+   - Right now the central claim is basically "better than two LoRA settings."
+   - That is too weak for NeurIPS, especially because `LoRA-r2 < LoRA-r1` makes reviewers suspect the baseline suite may be under-tuned.
+   - **Minimum fix:** run a small best-of grid for LoRA, and add at least **two relevant non-LoRA baselines**, ideally one from the orthogonal family (`BOFT` or `qGOFT`) and one strong decomposition baseline (`DoRA` or `VeRA`). Also include a **parameter-matched** comparison near `266K` and near `14K`.
+
+2. **No decisive mechanism ablation**
+   - You do not yet show that the gain comes from the learned rotation spaces rather than "a diagonal adapter plus a decent training recipe."
+   - This is the single most obvious reviewer attack.
+   - **Minimum fix:** add a **no-rotation control** with the same parameter count and training setup:
+     - `diag-only` in the canonical basis for `JORA-diag`
+     - same control for `JORA-s96k16`
+   - If possible, add one more: **random frozen rotations**.
+
+3. **External validity is too narrow**
+   - One backbone, one SFT dataset, three evals is not enough for a main-track NeurIPS methods paper.
+   - Reviewers will say it may be a Mistral-7B + Alpaca artifact.
+   - **Minimum fix:** reproduce the main `JORA-diag` comparison on **one additional 7B backbone**. Even a reduced table with `LoRA + best non-LoRA baseline + JORA` is much better than staying single-model.
+
+4. **The effect size is modest relative to likely variance**
+   - The headline average gain over `LoRA-r1` is only `+0.007`, and it is mostly driven by GSM8K.
+   - Without uncertainty estimates, reviewers can dismiss this as seed noise.
+   - **Minimum fix:** report **per-seed results**, `mean ± std`, and a simple **bootstrap/paired significance analysis** on the main metrics.
+
+5. **The paper story is split and not yet disciplined**
+   - `JORA-diag` is your strongest result.
+   - `JORA-s96k16` is interesting, but not yet strong enough to lead the paper.
+   - **Minimum fix:** make **`JORA-diag` the main claim**. Position `s96k16` as an extreme-budget extension.
+
+6. **Novelty positioning is vulnerable**
+   - Rotation-based PEFT is already crowded. Without direct comparison and a crisp statement of what is new, reviewers may call this an incremental variant.
+   - **Minimum fix:** sharpen the related-work framing around "diagonal adaptation in learned orthogonal bases" and explicitly explain what BOFT/qGOFT/DoRA do not provide.
+
+**What I Would Do Next** (in order):
+1. Fix the baseline story
+2. Run the no-rotation control
+3. Add one second backbone
+
+The ongoing `high_low` run is **not** on the critical path.
+
+**Bottom Line**: Current status: **No**. After the minimum fixes, this could move into **borderline accept** territory.
+
+</details>
+
+### Actions Taken
+- Submitted fresh empirical results (3-seed anchors: JORA-diag, JORA-s96k16, LoRA-r1/r2; lr_theta ablations) to GPT-5.4 xhigh reviewer.
+- Received score: 5/10, NOT READY.
+
+### Results
+- Implementation is solid (9/10 from prior loop), but the empirical package is incomplete for NeurIPS.
+- Critical path: (1) non-LoRA baselines, (2) no-rotation ablation, (3) second backbone.
+
+### Status
+- Continuing to Round 7. Planning Phase C fixes.
+
+---
+
+## Round 7 (2026-04-13T19:46:47+08:00) — Empirical Story Re-assessment with DoRA
+
+### Assessment (Summary)
+- Score: 6/10
+- Verdict: NOT READY
+- Key criticisms:
+  1. Mechanism claim is still unproven because the no-rotation control is incomplete, and the current in-flight ablation is not yet persuasive enough for the main JORA-diag claim.
+  2. The nearest orthogonal-family baseline is still missing in the exact Mistral-7B / Alpaca-cleaned setup; BOFT/qGOFT remains a reviewer attack surface.
+  3. External validity is still too narrow: one backbone, one corpus, one training recipe.
+  4. The JORA-diag gain is now more credible, but still modest enough that the rest of the package must be airtight.
+
+### Reviewer Raw Response
+
+<details>
+<summary>Click to expand full reviewer response</summary>
+
+1. **Score this work 1-10 for NeurIPS readiness**
+
+**6/10.**  
+The new DoRA evidence moves it up from my previous `5/10` range, but not enough to clear the submission bar.
+
+2. **Verdict: READY / ALMOST / NOT READY**
+
+**NOT READY**
+
+3. **Remaining critical weaknesses ranked by severity**
+
+- **1. Missing claim-bearing mechanism ablation.** The paper’s core scientific claim is that learned orthogonal rotation spaces matter. That is still unproven because the no-rotation control is incomplete, and the in-flight script appears aimed at the selective story rather than the main `JORA-diag` headline.
+- **2. Missing nearest-neighbor orthogonal baseline.** Beating LoRA and DoRA helps, but the closest reviewer objection is still: “How is this better than BOFT/qGOFT or related orthogonal-space PEFT?” Without that comparison, the novelty story remains exposed.
+- **3. External validity is still too narrow.** All claim-bearing results are still one backbone, one training corpus, one training recipe. For NeurIPS, that is thin for a methods paper.
+- **4. The headline gain is real but still modest.** `JORA-diag` is only `+0.00366` over `LoRA-r1` and `+0.00523` over `DoRA-r4` in mean average accuracy. That is promising, but still small enough that reviewers can call it setting-specific unless the rest of the package is airtight.
+
+4. **For each weakness, specify the MINIMUM fix**
+
+- **For 1:** finish a **no-rotation control on the exact `JORA-diag` configuration** that supports the main claim. Same modules, same schedule, same backbone, same evals. One seed is the minimum to make the argument at all; three seeds is the minimum to make it persuasive.
+- **For 2:** finish **one orthogonal-family baseline** in the exact same Mistral-7B / Alpaca-cleaned setup, preferably `BOFT` or `qGOFT`. This is still gatekeeping, not optional.
+- **For 3:** add **one second backbone** with the compact main table only: `JORA-diag`, tuned `LoRA`, `DoRA`, and one orthogonal baseline. Same three benchmarks is enough as a minimum.
+- **For 4:** report **per-seed tables and uncertainty cleanly**. At minimum: `mean ± std` everywhere and a simple paired significance / bootstrap analysis for `JORA-diag` vs `LoRA-r1` and `DoRA`.
+
+5. **Bottom line: given the new DoRA baseline evidence, is this now in borderline-accept territory, or still not there?**
+
+**Still not there.**
+
+The DoRA result is **material**, not cosmetic. It changes the story from “beats LoRA only” to “also beats a credible non-LoRA baseline while using far fewer parameters,” which is meaningful. But it does **not** change the main gatekeepers.
+
+My current read is:
+
+- **No-rotation control:** still **gatekeeping**
+- **Orthogonal baseline (BOFT/qGOFT):** still **gatekeeping**
+- **Second backbone:** still **very close to gatekeeping**, and in practice I would treat it as gatekeeping for NeurIPS given how narrow the current setup is
+
+If the no-rotation control lands cleanly, one orthogonal baseline is favorable, and a second-backbone check is non-embarrassing, then this can move into **borderline-accept** territory. Without those, I would still expect **borderline reject / weak reject**.
+
+</details>
+
+### Actions Taken
+- Submitted updated empirical evidence to the external reviewer, including the 3-seed JORA-diag / LoRA-r1 / LoRA-r2 Mistral-7B anchors and the newly surfaced 3-seed DoRA-r4 Mistral-7B baseline.
+- Verified current anchor numbers from `formal_runs/three_gpu_bf16_phase3/summary.json`: JORA-diag reaches `0.48857 ± 0.00371`, LoRA-r1 reaches `0.48491 ± 0.00647`, and LoRA-r2 reaches `0.47385 ± 0.01369` average accuracy.
+- Verified current DoRA Mistral-7B Alpaca benchmarks from `checkpoints/dora/dora_mistral_7b_alpaca_rank4_seed42/benchmarks.json`, `...seed1337/benchmarks.json`, and `...seed2026/benchmarks.json` (mean average accuracy ≈ `0.48334` at `1,867,776` trainable params).
+- Checked in-flight ablations and baseline jobs:
+  - `formal_runs/ablation_seed2026/abl_diag_norot` is still training (active PID 411789; `checkpoint-6147/trainer_state.json` indicates epoch 1.0).
+  - `formal_runs/ablation_seed2026/abl_highlow` has produced `checkpoint-12294` but is not currently an active Python process and has no evaluation artifact yet.
+  - BOFT Mistral evaluation is in progress for seed 42 (`scripts/evaluate_reasoning_benchmarks.py` active on `checkpoints/boft/boft_mistral_7b_alpaca_rank4_seed42`).
+- Confirmed there is still no claim-bearing second-backbone package integrated into the current paper path; older `experiment/llama2_7b/...` artifacts remain from an earlier phase and are not enough to close the reviewer concern.
+
+### Results
+- Reviewer score improved from `5/10` to `6/10` after adding the DoRA baseline evidence.
+- The DoRA result materially strengthens baseline credibility: JORA-diag now beats both LoRA-r1 and DoRA-r4 while using far fewer parameters.
+- However, the reviewer still treats three items as gatekeeping for borderline-accept territory:
+  1. exact no-rotation mechanism control for the main JORA-diag claim,
+  2. one orthogonal-family baseline in the same setup,
+  3. one second-backbone confirmation.
+
+### Status
+- Continuing to Round 8 after pending empirical artifacts land.
+- Active critical-path jobs:
+  1. `abl_diag_norot` training (mechanism control)
+  2. BOFT Mistral benchmark evaluation (orthogonal baseline)
+- Still missing: second-backbone compact table.

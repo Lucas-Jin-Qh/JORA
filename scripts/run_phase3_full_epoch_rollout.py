@@ -443,6 +443,19 @@ def build_anchor_specs(selected_shape: ShapeCandidate, best_theta: float, best_c
     return [jora, lora_r1, lora_r2]
 
 
+def build_all_anchor_specs(selected_shape: ShapeCandidate, best_theta: float, best_core: float, num_train_epochs: float) -> list[Any]:
+    """Build one global anchor queue ordered to keep long JORA runs on GPUs first."""
+    by_seed = {
+        seed: build_anchor_specs(selected_shape, best_theta, best_core, seed, num_train_epochs)
+        for seed in CLAIM_SEEDS
+    }
+    ordered: list[Any] = []
+    ordered.extend(specs[0] for _, specs in sorted(by_seed.items()))
+    ordered.extend(specs[1] for _, specs in sorted(by_seed.items()))
+    ordered.extend(specs[2] for _, specs in sorted(by_seed.items()))
+    return ordered
+
+
 def build_appendix_core_specs(best_theta: float, best_core: float, num_train_epochs: float) -> list[Any]:
     base = with_epoch_schedule(
         replace(
@@ -765,14 +778,17 @@ def run_anchor_rounds(
         "seeds": list(CLAIM_SEEDS),
         "rounds": {},
     }
+    specs = build_all_anchor_specs(selected_shape, best_theta, best_core, args.anchor_epochs)
+    runs = run_parallel_specs_with_mmlu_eval(specs, args.gpus, args, output_name=FULL_MMLU_OUTPUT_NAME)
+    full_eval_outputs = run_parallel_full_evals(runs, args.gpus, args, mmlu_output_name=FULL_MMLU_OUTPUT_NAME)
+    for spec_name, output_path in full_eval_outputs.items():
+        runs[spec_name]["benchmarks_output"] = output_path
+
     for seed in CLAIM_SEEDS:
-        specs = build_anchor_specs(selected_shape, best_theta, best_core, seed, args.anchor_epochs)
-        runs = run_parallel_specs_with_mmlu_eval(specs, args.gpus, args, output_name=FULL_MMLU_OUTPUT_NAME)
-        full_eval_outputs = run_parallel_full_evals(runs, args.gpus, args, mmlu_output_name=FULL_MMLU_OUTPUT_NAME)
-        for spec_name, output_path in full_eval_outputs.items():
-            runs[spec_name]["benchmarks_output"] = output_path
-        phase_payload["rounds"][f"seed{seed}"] = {"seed": seed, "runs": runs}
-        update_state_phase(state, "anchors", phase_payload, args.workdir)
+        seed_runs = {name: entry for name, entry in runs.items() if entry["seed"] == seed}
+        phase_payload["rounds"][f"seed{seed}"] = {"seed": seed, "runs": seed_runs}
+
+    update_state_phase(state, "anchors", phase_payload, args.workdir)
     return phase_payload
 
 
