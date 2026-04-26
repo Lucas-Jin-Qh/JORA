@@ -171,6 +171,22 @@ class JoraTrainerCallback(TrainerCallback):
             if self.verbose:
                 logger.info(f"JoraTrainerCallback: Set total_steps={self._total_steps}")
 
+        # Check if optimizer has JORA-specific param groups
+        optimizer = kwargs.get("optimizer", None)
+        if optimizer is not None:
+            try:
+                jora_group_names = {g.get("name", "") for g in optimizer.param_groups}
+                if "jora_theta" not in jora_group_names:
+                    logger.warning(
+                        "JoraTrainerCallback: Optimizer does not have separate param groups "
+                        "for theta/core. lr_theta and lr_core config values are being ignored. "
+                        "Use model.get_optimizer_param_groups(base_lr) to create proper param groups: "
+                        "groups = jora_model.get_optimizer_param_groups(base_lr=args.learning_rate); "
+                        "optimizer = AdamW(groups)"
+                    )
+            except Exception:
+                pass  # Silently ignore if optimizer doesn't have param_groups access
+
         self._initialized = True
 
     def on_step_end(self, args: "TrainingArguments", state: "TrainerState",

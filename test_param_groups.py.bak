@@ -1,0 +1,91 @@
+#!/usr/bin/env python
+"""Smoke test for JORA param group separation (Scheme 1).
+
+Tests that get_optimizer_param_groups correctly separates:
+- theta params (rotation angles)
+- core params (delta/magnitude)
+- magnitude params (if OER enabled)
+
+Also verifies LR scaling: theta_lr = base_lr * (lr_theta / lr_core)
+"""
+
+import sys
+import torch
+import torch.nn as nn
+from peft import get_peft_model, LoraConfig
+from transformers import AutoModelForCausalLM, AutoConfig
+
+sys.path.insert(0, '/home/jqh/Workshop/JORA/src')
+
+from peft.tuners.jora.config import JoraConfig
+from peft.tuners.jora.model import JoraModel
+
+# Create a tiny model for testing
+model_name = "mistralai/Mistral-7B-v0.1"
+print("Loading model config only (no weights)...")
+config = AutoConfig.from_pretrained(model_name, torch_dtype=torch.float32)
+model = AutoModelForCausalLM.from_config(config)
+
+print(f"Model type: {type(model)}")
+print(f"Model params before PEFT: {sum(p.numel() for p in model.parameters()):,}")
+
+# Create JORA config
+jora_config = JoraConfig(
+    target_modules=["q_proj", "v_proj"],
+    jora_core="selective_diag",
+    s_l=16,
+    s_r=16,
+    k=4,
+    lr_theta=0.1,
+    lr_core=0.01,
+)
+
+print("\nJORA config:")
+print(f"  lr_theta={jora_config.lr_theta}, lr_core={jora_config.lr_core}")
+print(f"  s_l={jora_config.s_l}, s_r={jora_config.s_r}, k={jora_config.k}")
+
+# Wrap model with PEFT
+print("\nWrapping with JORA...")
+peft_model = get_peft_model(model, jora_config)
+
+# Find the JoraModel wrapper
+if hasattr(peft_model, 'base_model'):
+    jora_model = peft_model.base_model
+else:
+    jora_model = peft_model
+
+print(f"JoraModel type: {type(jora_model)}")
+
+# Test get_optimizer_param_groups
+print("\nTesting get_optimizer_param_groups(base_lr=1e-4)...")
+base_lr = 1e-4
+groups = jora_model.get_optimizer_param_groups(base_lr=base_lr)
+
+print(f"\nParam groups created: {len(groups)}")
+for i, g in enumerate(groups):
+    param_count = sum(p.numel() for p in g['params'])
+    print(f"\nGroup {i}: {g['name']}")
+    print(f"  LR: {g['lr']:.2e}")
+    print(f"  Params: {param_count:,}")
+    print(f"  Sample param shapes: {[p.shape for p in g['params'][:3]]}")
+
+# Verify theta LR scaling
+theta_lr = next((g['lr'] for g in groups if g['name'] == 'jora_theta'), None)
+core_lr = next((g['lr'] for g in groups if g['name'] == 'jora_core'), None)
+
+expected_theta_lr = base_lr * (jora_config.lr_theta / jora_config.lr_core)
+print(f"\nExpected theta_lr: {expected_theta_lr:.2e}")
+print(f"Actual theta_lr: {theta_lr:.2e}")
+print(f"Core LR (base): {core_lr:.2e}")
+
+# Assertions
+assert theta_lr is not None, "jora_theta param group not found!"
+assert core_lr is not None, "jora_core param group not found!"
+assert abs(theta_lr - expected_theta_lr) < 1e-12, f"theta_lr mismatch: {theta_lr} != {expected_theta_lr}"
+assert abs(core_lr - base_lr) < 1e-12, f"core_lr should equal base_lr: {core_lr} != {base_lr}"
+
+print("\n✅ All param group tests passed!")
+
+# Print total trainable params
+total_trainable = sum(p.numel() for g in groups for p in g['params'])
+print(f"Total trainable params from groups: {total_trainable:,}")

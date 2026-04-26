@@ -285,6 +285,85 @@ class JoraModel(BaseTuner):
                 for param in m.parameters():
                     param.requires_grad = True
 
+    def get_optimizer_param_groups(self, base_lr: float = 1e-4) -> list[dict]:
+        """Return optimizer param groups with JORA-specific LR scaling.
+
+        JORA has two parameter types with different gradient scales:
+        - theta (rotation angles): high leverage, needs lower LR
+        - core/delta (diagonal scaling): directly scales activations
+
+        This method creates separate param groups so they can be trained
+        with different learning rates. Without this, lr_theta and lr_core
+        config values are ignored and all params share base_lr.
+
+        Usage:
+            model = get_peft_model(base_model, jora_config)
+            groups = model.get_optimizer_param_groups(base_lr=args.learning_rate)
+            optimizer = AdamW(groups)
+
+        Args:
+            base_lr: Base learning rate for core parameters.
+                    theta_lr = base_lr * (lr_theta / lr_core)
+
+        Returns:
+            List of param groups dicts with 'params', 'lr', 'name' keys.
+        """
+        from .layer import JoraLayer
+
+        theta_params = []
+        core_params = []
+        magnitude_params = []
+
+        for layer in self._jora_layers:
+            for adapter_name, adapter_state in layer.adapters.items():
+                cfg = adapter_state.cfg
+
+                # theta_L and theta_R: rotation angles
+                if adapter_state.theta_L is not None:
+                    theta_params.append(adapter_state.theta_L)
+                if adapter_state.theta_R is not None:
+                    theta_params.append(adapter_state.theta_R)
+
+                # core parameters (delta for selective_diag, etc.)
+                for p in adapter_state.core.parameters():
+                    core_params.append(p)
+
+                # magnitude (OER logits if enabled)
+                if adapter_state.ecd_log_mag is not None:
+                    magnitude_params.append(adapter_state.ecd_log_mag)
+
+        groups = []
+
+        # theta: rotation angles — high leverage, needs lower LR
+        if theta_params:
+            # Use lr_theta/lr_core ratio from config to scale theta LR
+            lr_ratio = float(getattr(cfg, 'lr_theta', 1.0)) / float(getattr(cfg, 'lr_core', 1.0))
+            theta_lr = base_lr * lr_ratio
+            groups.append({
+                "params": theta_params,
+                "lr": theta_lr,
+                "name": "jora_theta",
+            })
+
+        # core (delta): diagonal scaling — directly scales activations
+        if core_params:
+            groups.append({
+                "params": core_params,
+                "lr": base_lr,
+                "name": "jora_core",
+            })
+
+        # magnitude: OER logits (if enabled)
+        if magnitude_params:
+            magnitude_lr_scale = float(getattr(cfg, 'magnitude_lr_scale', 1.0))
+            groups.append({
+                "params": magnitude_params,
+                "lr": base_lr * magnitude_lr_scale,
+                "name": "jora_magnitude",
+            })
+
+        return groups
+
     def disable_adapter_layers(self) -> None:
         for m in self.model.modules():
             if isinstance(m, JoraLayer):

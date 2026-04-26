@@ -93,10 +93,183 @@ class SelectiveDiagCore(nn.Module):
         return self.support_size
 
 
+class CoupledPairCore(nn.Module):
+    """2x2 coupled blocks on each rotation pair for increased expressiveness.
+
+    WARNING: This is an EXPLORATORY variant — NOT paper-path.
+        CoupledPairCore uses the LEGACY adapter path in compute_delta():
+        delta = R_L^T @ core(R_R @ x)  (without residualization)
+        This is DIFFERENT from SelectiveDiagCore's paper-exact path:
+        delta = R_L^T @ D_sel @ R_R @ x - P_U @ x
+        Key consequence: at zero-init, CoupledPairCore does NOT give zero-function-change
+        because the subtraction (P_U @ x) is missing. Use SelectiveDiagCore for paper.
+
+    Motivation:
+        JORA uses rotation pairs (i, j) where R builds coupling between dimensions i and j.
+        However, SelectiveDiagCore applies independent diagonal scaling to each dimension,
+        which decouples what rotation coupled. This is contradictory.
+
+    Solution:
+        Replace diag(delta[i]) with a 2x2 block that captures within-pair coupling:
+
+            [y_i]   [1+δ_ii  δ_ij] [x_i]
+            [y_j] = [δ_ji   1+δ_jj] [x_j]
+
+    Pair Structure (Critical):
+        Unlike SelectiveDiagCore which just needs unique indices (order doesn't matter),
+        CoupledPairCore MUST preserve which indices form a pair. This is because
+        the 2x2 block is only meaningful when it couples dimensions that were
+        already coupled by the rotation.
+
+        The pair structure flows through:
+        1. Rotation selection → pairs_L [[i,j], [k,l], ...], pairs_R [[i,j], [k,l], ...]
+        2. set_support_pairs(pairs) → stores pairs [n_pairs, 2] internally
+        3. apply_to_vector → couples (u[2p], u[2p+1]) for each pair
+
+        IMPORTANT: Never use torch.unique() on the indices before calling set_support_pairs,
+        as this destroys the pair structure.
+
+    API:
+        - set_support_pairs(pairs): Set from rotation pairs [n_pairs, 2]
+        - set_support(indices_interleaved): Legacy compat — interleaved as [i,j,k,l,...]
+
+    For the same k value:
+        - SelectiveDiagCore: k pairs → support_size=2k → params=2k
+        - CoupledPairCore:   k pairs → support_size=2k → n_pairs=k → params=4k
+          (More params, but captures coupling within each rotation pair)
+    """
+
+    def __init__(self, n_pairs: int, device, dtype):
+        super().__init__()
+        self.n_pairs = int(n_pairs)
+        # support_size = 2 * n_pairs for full pairs
+        self.support_size = self.n_pairs * 2
+        # [n_pairs, 2, 2], zero-init for identity start
+        # block[p, 0, 0] = δ_ii, block[p, 0, 1] = δ_ij, etc.
+        self.pair_blocks = nn.Parameter(
+            torch.zeros(self.n_pairs, 2, 2, device=device, dtype=dtype)
+        )
+        # Store pairs [n_pairs, 2] directly — critical for preserving structure
+        self.register_buffer("pairs", torch.zeros(self.n_pairs, 2, dtype=torch.long, device=device))
+        self.register_buffer("active_n_pairs", torch.zeros((), dtype=torch.long, device=device))
+        self._active_n_pairs_py = 0
+        self.register_load_state_dict_post_hook(self._sync_runtime_state)
+
+    def _sync_runtime_state(self, *_args, **_kwargs) -> None:
+        self._active_n_pairs_py = int(self.active_n_pairs.item())
+
+    def set_support_pairs(self, pairs: Tensor) -> None:
+        """Set support from rotation pairs [n_pairs, 2].
+
+        This is the PRIMARY interface for CoupledPairCore. It preserves the
+        pair structure that rotation selection established.
+
+        Args:
+            pairs: Tensor of shape [n_active_pairs, 2] where pairs[p] = [i, j]
+                   are the two dimensions coupled by rotation p.
+        """
+        pairs = pairs.to(device=self.pairs.device, dtype=torch.long)
+        if pairs.ndim == 1:
+            pairs = pairs.reshape(-1, 2)
+        n_active = int(pairs.shape[0])
+        assert n_active <= self.n_pairs, (
+            f"Expected at most {self.n_pairs} pairs, got {n_active}"
+        )
+
+        self.pairs.zero_()
+        if n_active > 0:
+            self.pairs[:n_active].copy_(pairs)
+        self.active_n_pairs.fill_(n_active)
+        self._active_n_pairs_py = n_active
+
+        # Zero out pair blocks for inactive pairs
+        with torch.no_grad():
+            self.pair_blocks[n_active:].zero_()
+
+    def set_support(self, indices_interleaved: Tensor) -> None:
+        """Set support from interleaved indices [i0, j0, i1, j1, ...].
+
+        This is a LEGACY compatibility interface for SelectiveDiagCore-style callers.
+        It converts interleaved indices back to pairs and calls set_support_pairs.
+        WARNING: Only use this when indices are already interleaved (not unique sorted).
+        """
+        indices = indices_interleaved.to(device=self.pairs.device, dtype=torch.long).reshape(-1)
+        n_indices = int(indices.numel())
+        n_pairs = n_indices // 2
+        assert n_indices % 2 == 0, f"Interleaved indices must be even, got {n_indices}"
+
+        if n_pairs > 0:
+            pairs = indices[:n_pairs * 2].reshape(n_pairs, 2)
+            self.set_support_pairs(pairs)
+        else:
+            self.set_support_pairs(torch.zeros(0, 2, dtype=torch.long, device=self.pairs.device))
+
+    def apply_to_vector(self, x: Tensor) -> Tensor:
+        """Apply 2x2 coupled blocks to rotation pairs (vectorized).
+
+        For each pair (i, j) in support:
+            y[i] = x[i] * (1 + δ_ii) + x[j] * δ_ij
+            y[j] = x[i] * δ_ji + x[j] * (1 + δ_jj)
+
+        With zero-init (δ=0), this acts as identity.
+        """
+        n_active = self._active_n_pairs_py
+        y = torch.zeros_like(x)
+        if n_active <= 0:
+            return y
+
+        # Get active pairs [n_active, 2]
+        active_pairs = self.pairs[:n_active]  # [n_active, 2]
+
+        # Gather paired values: for each pair [i, j], extract x[..., i] and x[..., j]
+        # Using advanced indexing
+        idx0 = active_pairs[:, 0]  # [n_active]
+        idx1 = active_pairs[:, 1]  # [n_active]
+
+        # Extract: x_pairs[p] = [x[..., i_p], x[..., j_p]]
+        x0 = x[..., idx0]  # [..., n_active]
+        x1 = x[..., idx1]  # [..., n_active]
+
+        # Get blocks and add identity: [n_active, 2, 2]
+        blocks = self.pair_blocks[:n_active].to(device=x.device, dtype=x.dtype)
+        eye = torch.eye(2, device=x.device, dtype=x.dtype).unsqueeze(0)
+        transform = blocks + eye  # [n_active, 2, 2]
+
+        # Batched matmul along the last dim: each 1x2 row of transform applies to [x0, x1]
+        # [x0, x1] @ transform.T gives the coupled output
+        # Using einsum: [..., p] x [p, i, j] -> [..., p, i] then sum over i
+        x_in = torch.stack([x0, x1], dim=-1)  # [..., n_active, 2]
+        y_out = torch.einsum('...pi,pij->...pj', x_in, transform)  # [..., n_active, 2]
+
+        # Scatter back
+        y[..., idx0] = y_out[..., 0]
+        y[..., idx1] = y_out[..., 1]
+
+        return y
+
+    def project_support(self, x: Tensor) -> Tensor:
+        """Apply projection P_U (identity on active support, zero elsewhere).
+
+        For CoupledPairCore, projecting means setting non-support dimensions to zero.
+        """
+        n_active = self._active_n_pairs_py
+        y = torch.zeros_like(x)
+        if n_active <= 0:
+            return y
+        idx = self.pairs[:n_active].reshape(-1)  # Interleaved indices
+        y[..., idx] = x[..., idx]
+        return y
+
+    @property
+    def num_params(self) -> int:
+        """Number of trainable parameters: n_pairs * 4 (each 2x2 block)."""
+        return self.n_pairs * 4
+
+
 class DiagCore(nn.Module):
     """Diagonal core D (stored as its diagonal)."""
 
-    def __init__(self, n: int, m: int, device, dtype, zero_init: bool = False):
+    def __init__(self, n: int, m: int, device, dtype, zero_init: bool = False, init_std: float = 5e-3):
         super().__init__()
         self.n = int(n)
         self.m = int(m)
@@ -104,8 +277,7 @@ class DiagCore(nn.Module):
         if zero_init:
             self.diag_params = nn.Parameter(torch.zeros(d_size, device=device, dtype=dtype))
         else:
-            # Break zero-gradient deadlock: small random init
-            self.diag_params = nn.Parameter(0.01 * torch.randn(d_size, device=device, dtype=dtype))
+            self.diag_params = nn.Parameter(torch.randn(d_size, device=device, dtype=dtype) * init_std)
 
     def forward(self) -> Tensor:
         warnings.warn(
@@ -145,7 +317,7 @@ class DiagCore(nn.Module):
 class BlockCore(nn.Module):
     """Block-diagonal core: dense blocks along diagonal + optional remainder diagonal."""
 
-    def __init__(self, n: int, m: int, device, dtype, block_size: int = 4, zero_init: bool = False):
+    def __init__(self, n: int, m: int, device, dtype, block_size: int = 4, zero_init: bool = False, init_std: float = 5e-3):
         super().__init__()
         self.n = int(n)
         self.m = int(m)
@@ -158,7 +330,8 @@ class BlockCore(nn.Module):
         if self.n_blocks > 0:
             init = torch.zeros(self.n_blocks, self.block_size, self.block_size, device=device, dtype=dtype)
             if not zero_init:
-                init = 0.1 * torch.randn_like(init)
+                # Initialize as identity + small noise for near-identity start
+                init = torch.randn_like(init) * init_std
             self.blocks = nn.Parameter(init)
         else:
             self.register_parameter("blocks", None)
@@ -166,7 +339,7 @@ class BlockCore(nn.Module):
         if self.remainder_size > 0:
             init_r = torch.zeros(self.remainder_size, device=device, dtype=dtype)
             if not zero_init:
-                init_r = 0.1 * torch.randn_like(init_r)
+                init_r = torch.randn_like(init_r) * init_std
             self.diag_remainder = nn.Parameter(init_r)
         else:
             self.register_parameter("diag_remainder", None)
@@ -279,7 +452,7 @@ class BlockCore(nn.Module):
 class LowRankCore(nn.Module):
     """Low-rank core D = A @ B^T, with LoRA-style scaling."""
 
-    def __init__(self, n: int, m: int, device, dtype, rank: int = 8, zero_init: bool = False):
+    def __init__(self, n: int, m: int, device, dtype, rank: int = 8, zero_init: bool = False, init_std: float = 5e-3):
         super().__init__()
         self.n = int(n)
         self.m = int(m)
@@ -289,15 +462,13 @@ class LowRankCore(nn.Module):
             raise ValueError("lowrank_r must be > 0")
 
         if zero_init:
-            # Preserve an exact zero operator at init without deadlocking both factors.
-            # Setting A=B=0 makes y=0, but also makes grad_A=grad_B=0 forever.
-            # Match LoRA-style init instead: keep the "up" factor zero and the
-            # "down" factor random so the first backward step can update A.
+            # LoRA-style: A=zero, B=small-random → zero-operator at init with live gradients
             A = torch.zeros(self.n, self.r, device=device, dtype=dtype)
-            B = 0.1 * torch.randn(self.m, self.r, device=device, dtype=dtype)
+            B = torch.randn(self.m, self.r, device=device, dtype=dtype) * init_std
         else:
-            A = 0.1 * torch.randn(self.n, self.r, device=device, dtype=dtype)
-            B = 0.1 * torch.randn(self.m, self.r, device=device, dtype=dtype)
+            # Symmetry-breaking: both A and B small-random
+            A = torch.randn(self.n, self.r, device=device, dtype=dtype) * init_std
+            B = torch.randn(self.m, self.r, device=device, dtype=dtype) * init_std
 
         self.A = nn.Parameter(A)
         self.B = nn.Parameter(B)
@@ -321,17 +492,44 @@ def build_core(core_type: str, n: int, m: int, device, dtype, cfg) -> nn.Module:
         support_size = int(getattr(cfg, "k", 8)) * 2  # k pairs -> 2k support indices
         return SelectiveDiagCore(support_size=support_size, device=device, dtype=dtype)
     if core_type == "diag":
-        return DiagCore(n, m, device=device, dtype=dtype, zero_init=getattr(cfg, "zero_init_core", False))
+        init_std = float(getattr(cfg, 'core_init_std', 5e-3))
+        return DiagCore(n, m, device=device, dtype=dtype, zero_init=getattr(cfg, "zero_init_core", False), init_std=init_std)
     if core_type == "block":
+        init_std = float(getattr(cfg, 'core_init_std', 5e-3))
         return BlockCore(n, m, device=device, dtype=dtype,
                          block_size=int(getattr(cfg, "block_size", 4)),
-                         zero_init=getattr(cfg, "zero_init_core", False))
+                         zero_init=getattr(cfg, "zero_init_core", False), init_std=init_std)
     if core_type == "lowrank":
         r = int(getattr(cfg, "lowrank_r", 8))
-        core = LowRankCore(n, m, device=device, dtype=dtype, rank=r, zero_init=getattr(cfg, "zero_init_core", False))
+        init_std = float(getattr(cfg, 'core_init_std', 5e-3))
+        core = LowRankCore(n, m, device=device, dtype=dtype, rank=r,
+                           zero_init=getattr(cfg, "zero_init_core", False), init_std=init_std)
         alpha = getattr(cfg, "lowrank_alpha", None)
         if alpha is None:
             alpha = r
         core.scaling = float(alpha) / float(r) if r > 0 else 1.0
         return core
+    if core_type == "coupled_pair":
+        # Scheme 3: 2x2 coupled blocks on rotation pairs
+        #
+        # k = number of pairs (from config)
+        # For SelectiveDiagCore: k pairs → support_size = 2k → params = 2k
+        # For CoupledPairCore:   k pairs → n_pairs = k → support_size = 2k → params = 4k
+        #
+        # The critical difference: CoupledPairCore preserves pair structure
+        # and applies coupled transformations within each rotation subspace.
+        #
+        # Comparison groups (same k means same rotation selection):
+        #   A: selective_diag @ k=16  → support_size=32, params=32   (paper-path, exact merge)
+        #   B: coupled_pair  @ k=16  → n_pairs=16,   params=64   (legacy-path, approx merge)
+        #
+        # IMPORTANT comparison rules:
+        #   A vs B: UNFAIR — different adapter paths AND different param counts
+        #   A vs C: FAIR   — same params (32), different structure
+        #
+        # For matched-param comparison, use:
+        #   C: selective_diag @ k=16  → params=32
+        #   D: coupled_pair  @ k=8   → n_pairs=8,    params=32   (same params, half coverage)
+        n_pairs = int(getattr(cfg, "k", 8))
+        return CoupledPairCore(n_pairs=n_pairs, device=device, dtype=dtype)
     raise ValueError(f"Unknown core type: {core_type}")

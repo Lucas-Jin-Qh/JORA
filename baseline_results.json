@@ -1,0 +1,121 @@
+{
+  "metadata": {
+    "source": "formal_runs/three_gpu_bf16_phase3_global_queue/summary.json",
+    "generated_at": "2026-04-14",
+    "model": "Mistral-7B-v0.1",
+    "training": "1 epoch, 3-GPU BF16",
+    "notes": "可信基线数据存档，基于多种子平均"
+  },
+  "anchor_results": {
+    "description": "3-seed 平均结果（最高可信度）",
+    "seeds": [42, 1337, 2026],
+    "methods": {
+      "JORA-s96_k16": {
+        "method": "jora",
+        "jora_core": "selective_diag",
+        "shape": {"s_l": 96, "s_r": 96, "k": 16},
+        "trainable_params": 14336,
+        "benchmarks": {
+          "mmlu": {"mean": 0.5277, "stdev": 0.0038},
+          "arc_challenge": {"mean": 0.6589, "stdev": 0.0121},
+          "gsm8k": {"mean": 0.1590, "stdev": 0.0080},
+          "average_accuracy": {"mean": 0.4485, "stdev": 0.0051}
+        }
+      },
+      "LoRA-r1": {
+        "method": "lora",
+        "lora_r": 1,
+        "trainable_params": 524288,
+        "benchmarks": {
+          "mmlu": {"mean": 0.5612, "stdev": 0.0057},
+          "arc_challenge": {"mean": 0.7358, "stdev": 0.0088},
+          "gsm8k": {"mean": 0.1478, "stdev": 0.0148},
+          "average_accuracy": {"mean": 0.4816, "stdev": 0.0068}
+        }
+      },
+      "LoRA-r2": {
+        "method": "lora",
+        "lora_r": 2,
+        "trainable_params": 1048576,
+        "benchmarks": {
+          "mmlu": {"mean": 0.5530, "stdev": 0.0105},
+          "arc_challenge": {"mean": 0.7012, "stdev": 0.0335},
+          "gsm8k": {"mean": 0.1509, "stdev": 0.0045},
+          "average_accuracy": {"mean": 0.4684, "stdev": 0.0153}
+        }
+      }
+    }
+  },
+  "appendix_results": {
+    "description": "Ablation 研究（JORA core 类型对比，1-seed）",
+    "methods": {
+      "JORA-diag": {
+        "method": "jora",
+        "jora_core": "diag",
+        "shape": {"s_l": 32, "s_r": 32, "k": 32},
+        "trainable_params": 266240,
+        "zero_init_core": true,
+        "benchmarks": {
+          "mmlu": {"mean": 0.5632},
+          "arc_challenge": {"mean": 0.7224},
+          "gsm8k": {"mean": 0.1835},
+          "average_accuracy": {"mean": 0.4897}
+        }
+      },
+      "JORA-lowrank-r1": {
+        "method": "jora",
+        "jora_core": "lowrank",
+        "jora_lowrank_r": 1,
+        "trainable_params": 528384,
+        "zero_init_core": true,
+        "benchmarks": {
+          "mmlu": {"mean": 0.5405},
+          "arc_challenge": {"mean": 0.6890},
+          "gsm8k": {"mean": 0.1547},
+          "average_accuracy": {"mean": 0.4614}
+        }
+      },
+      "JORA-block-bs4": {
+        "method": "jora",
+        "jora_core": "block",
+        "jora_block_size": 4,
+        "trainable_params": 1052672,
+        "zero_init_core": true,
+        "benchmarks": {
+          "mmlu": {"mean": 0.5555},
+          "arc_challenge": {"mean": 0.7023},
+          "gsm8k": {"mean": 0.1691},
+          "average_accuracy": {"mean": 0.4757}
+        }
+      }
+    }
+  },
+  "shape_probe": {
+    "description": "JORA 形状探��（s, k 参数敏感性）",
+    "methods": {
+      "JORA-s32_k32": {
+        "trainable_params": 8192,
+        "mmlu": 0.365
+      },
+      "JORA-s96_k16": {
+        "trainable_params": 14336,
+        "mmlu": 0.410
+      },
+      "JORA-s96_k32": {
+        "trainable_params": 16384,
+        "mmlu": 0.370
+      }
+    }
+  },
+  "pareto_analysis": {
+    "description": "参数效率 Pareto 分析",
+    "methods": [
+      {"name": "JORA-s96_k16", "params": 14336, "avg_acc": 0.4485, "is_pareto": true},
+      {"name": "JORA-diag", "params": 266240, "avg_acc": 0.4897, "is_pareto": true},
+      {"name": "JORA-block-bs4", "params": 1052672, "avg_acc": 0.4757, "is_pareto": true},
+      {"name": "JORA-lowrank-r1", "params": 528384, "avg_acc": 0.4614, "is_pareto": true},
+      {"name": "LoRA-r1", "params": 524288, "avg_acc": 0.4816, "is_pareto": true},
+      {"name": "LoRA-r2", "params": 1048576, "avg_acc": 0.4684, "is_pareto": false}
+    ]
+  }
+}

@@ -52,11 +52,6 @@ class _JoraAdapterState(nn.Module):
             self.theta_L = None
         else:
             init_std = float(cfg.theta_init_std)
-            # Paper path (selective_diag): zero-init theta so adapter starts at identity
-            if cfg.core == "selective_diag":
-                init_std = 0.0
-            elif not getattr(cfg, "force_random_rotation_init", True):
-                init_std = min(init_std, 0.001)
             if init_std == 0.0:
                 self.theta_L = nn.Parameter(torch.zeros(cfg.S_L, device=dev, dtype=dt))
             else:
@@ -66,11 +61,6 @@ class _JoraAdapterState(nn.Module):
             self.theta_R = None
         else:
             init_std = float(cfg.theta_init_std)
-            # Paper path (selective_diag): zero-init theta so adapter starts at identity
-            if cfg.core == "selective_diag":
-                init_std = 0.0
-            elif not getattr(cfg, "force_random_rotation_init", True):
-                init_std = min(init_std, 0.001)
             if init_std == 0.0:
                 self.theta_R = nn.Parameter(torch.zeros(cfg.S_R, device=dev, dtype=dt))
             else:
@@ -360,19 +350,24 @@ class _JoraAdapterState(nn.Module):
             self._freeze_support_if_needed()
 
     def _freeze_support_if_needed(self):
-        """Freeze support U for SelectiveDiagCore after calibration (paper-exact path).
+        """Freeze support for SelectiveDiagCore and CoupledPairCore after calibration.
 
-        Support is the unique union of all active pair indices. If the union is
-        smaller than the configured capacity we keep a masked tail instead of
-        padding duplicate indices, which avoids parameter aliasing while keeping
-        checkpoint tensor shapes stable.
+        Paper-exact path: for both core types, support must be explicitly set
+        after the warmup/calibration phase, otherwise active_support_size=0
+        and apply_to_vector returns all zeros.
+
+        SelectiveDiagCore: receives unique union of all pair indices (order doesn't matter).
+        CoupledPairCore: receives pairs directly from pairs_L/pairs_R (pair structure CRITICAL).
         """
-        from .core import SelectiveDiagCore
+        from .core import SelectiveDiagCore, CoupledPairCore
         if getattr(self, "_pairs_frozen", False):
             return
+
+        n_L = int(self.num_pairs_L.item())
+        n_R = int(self.num_pairs_R.item())
+
         if isinstance(self.core, SelectiveDiagCore):
-            n_L = int(self.num_pairs_L.item())
-            n_R = int(self.num_pairs_R.item())
+            # SelectiveDiagCore: unique indices, order doesn't matter
             indices_parts = []
             if n_L > 0:
                 indices_parts.append(self.pairs_L[:n_L].reshape(-1))
@@ -396,6 +391,50 @@ class _JoraAdapterState(nn.Module):
                 )
 
             self.core.set_support(unique_indices)
+
+        elif isinstance(self.core, CoupledPairCore):
+            # CoupledPairCore: MUST preserve pair structure from rotation selection.
+            # torch.unique() would destroy which indices were paired, defeating the
+            # entire motivation (restore coupling that rotation established).
+            pairs_L_active = self.pairs_L[:n_L] if n_L > 0 else None
+            pairs_R_active = self.pairs_R[:n_R] if n_R > 0 else None
+
+            all_pairs = []
+            if pairs_L_active is not None:
+                all_pairs.append(pairs_L_active)
+            if pairs_R_active is not None:
+                all_pairs.append(pairs_R_active)
+
+            if all_pairs:
+                pairs = torch.cat(all_pairs, dim=0)  # [n_total_pairs, 2]
+            else:
+                pairs = torch.zeros(0, 2, dtype=torch.long, device=self.core.pairs.device)
+
+            n_total_pairs = int(pairs.shape[0])
+            max_pairs = self.core.n_pairs
+
+            # Safety: if n_L + n_R > n_pairs (can happen due to safety clamp in
+            # _update_pair_buffer when P_L + P_R > k), truncate to n_pairs.
+            # This is safe because the extra pairs come from the safety clamp
+            # which gives min(1, ...) to each side, and n_pairs = k is the intended
+            # budget. Truncation is equivalent to "those extra pairs don't matter
+            # since we only have k pairs' worth of core parameters anyway."
+            if n_total_pairs > max_pairs:
+                import warnings
+                warnings.warn(
+                    f"JORA CoupledPairCore: n_L={n_L} + n_R={n_R} = {n_total_pairs} pairs "
+                    f"exceeds n_pairs={max_pairs} (k={self.cfg.k}). "
+                    f"Truncating to {max_pairs} pairs. "
+                    f"This can happen when selection buffer capacity > k and safety clamp "
+                    f"gives min(1, ...) to each side. Consider reducing S_L/S_R if this "
+                    f"happens frequently.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                pairs = pairs[:max_pairs]
+
+            self.core.set_support_pairs(pairs)
+
         self._pairs_frozen = True
         self.pairs_frozen_flag.fill_(True)
 
@@ -456,7 +495,7 @@ class _JoraAdapterState(nn.Module):
         Legacy formula (other core types):
             delta = R_L^T @ core(R_R @ x)  [with optional tanh]
         """
-        from .core import SelectiveDiagCore
+        from .core import SelectiveDiagCore, CoupledPairCore
 
         if isinstance(self.core, SelectiveDiagCore):
             # Paper-exact path: R_L^T @ D_sel @ R_R @ x - P_U @ x
@@ -481,18 +520,34 @@ class _JoraAdapterState(nn.Module):
             #    This differs from R_L^T P_U R_R x: only y_rotated depends on theta,
             #    so theta gradients are nonzero even at delta=0 (once support is set).
             proj_x = self.core.project_support(x)  # P_U @ x  (support indices applied to x)
-            return y_rotated - proj_x
-        else:
-            # Legacy path
-            # 1) Input rotation (Right)
+            # [Scheme 2] Upcast to fp32 for the critical subtraction to avoid bf16
+            # precision loss. When y_rotated and proj_x are both O(1) but their
+            # difference is O(0.01), bf16's 7-bit mantissa can lose 1-2 bits of
+            # effective precision, making early gradients noisy.
+            delta = y_rotated.float() - proj_x.float()
+            return delta.to(x.dtype)
+        elif isinstance(self.core, CoupledPairCore):
+            # CoupledPairCore: legacy path, but disable tanh.
+            #
+            # WARNING: This is NOT the paper-exact residualized formula.
+            # CoupledPairCore does NOT use: y_rotated - P_U @ x
+            # Instead it uses: R_L^T @ core(R_R @ x)  (without residualization)
+            #
+            # apply_to_vector is identity on support at zero-init (not zero-operator).
+            # We disable tanh to avoid additional nonlinearity distortion on top of the
+            # core's implicit identity behavior. This gives CP-1 gate the best chance
+            # of passing. The gate itself (Step 3) is the definitive correctness check.
             x_rot = self._apply_side_rotation(x, is_left_side=False)
-            # 2) Core computation
             y_core = self.core.apply_to_vector(x_rot)
-            # 3) Output rotation (Left)
             y = self._apply_side_rotation(y_core, is_left_side=True)
-            # Soft clipping to prevent gradient explosion while maintaining smoothness
-            if not getattr(self.cfg, "zero_init_core", False):
-                y = torch.tanh(y)
+            return y  # No tanh — preserves zero-function-change at init
+        else:
+            # DiagCore / BlockCore / LowRankCore path
+            # No tanh: these cores use zero_init_core=True with small non-zero init for
+            # near-identity start. tanh would distort the learned diagonal/block/lowrank updates.
+            x_rot = self._apply_side_rotation(x, is_left_side=False)
+            y_core = self.core.apply_to_vector(x_rot)
+            y = self._apply_side_rotation(y_core, is_left_side=True)
             return y
 
     def maybe_apply_magnitude(self, out: Tensor) -> Tensor:

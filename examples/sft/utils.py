@@ -14,6 +14,25 @@ from transformers import (
 
 from peft import LoraConfig, JoraConfig, OFTConfig, BOFTConfig, IA3Config
 
+# Offline mode: set HF_HUB_OFFLINE=1 in the subprocess environment, or set it here.
+# When offline, from_pretrained will use cached files if local_files_only=True.
+_HF_OFFLINE = os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+
+
+def _resolve_cached_model_path(model_name: str) -> str:
+    """Resolve a cached HuggingFace model path for offline use.
+
+    Returns the snapshot directory if the model is cached locally.
+    Falls back to the original model_name if not cached.
+    """
+    if not _HF_OFFLINE:
+        return model_name
+    try:
+        from huggingface_hub import HfApi
+        return HfApi().snapshot_download(model_name, local_files_only=True)
+    except Exception:
+        return model_name
+
 
 DEFAULT_CHATML_CHAT_TEMPLATE = "{% for message in messages %}\n{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% if loop.last and add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}{% endfor %}"
 DEFAULT_ZEPHYR_CHAT_TEMPLATE = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
@@ -232,6 +251,9 @@ def create_and_prepare_model(args, data_args, training_args):
         else:
             raise ValueError(f"Unsupported torch_dtype: {args.torch_dtype}")
 
+        # Resolve cached path for offline mode
+        _model_path = _resolve_cached_model_path(args.model_name_or_path)
+
         # Prepare model loading arguments
         model_kwargs = {
             "trust_remote_code": True,
@@ -248,7 +270,7 @@ def create_and_prepare_model(args, data_args, training_args):
         if bnb_config is not None:
             model_kwargs["quantization_config"] = bnb_config
 
-        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(_model_path, **model_kwargs)
 
     peft_config = None
     chat_template = None
@@ -262,6 +284,7 @@ def create_and_prepare_model(args, data_args, training_args):
             else jora_target_modules
         )
 
+        # Build jora_kwargs. selection is handled separately per factory method to avoid overriding hardcoded defaults.
         jora_kwargs = dict(
             target_modules=target_modules,
             S_L=args.jora_s_l,
@@ -269,7 +292,6 @@ def create_and_prepare_model(args, data_args, training_args):
             k=args.jora_k,
             rotation_param=args.jora_rotation_param,
             rotation_impl=args.jora_rotation_impl,
-            selection=args.jora_selection_type,
             magnitude=args.jora_magnitude,
             update_interval=args.jora_update_interval,
             ema_update_interval=args.jora_ema_update_interval,
@@ -296,13 +318,21 @@ def create_and_prepare_model(args, data_args, training_args):
             # P0 learning rate parameters
             lr_theta=args.jora_lr_theta,
             lr_core=args.jora_lr_core,
+            # P0 initialization parameters
+            **({"theta_init_std": args.jora_theta_init_std} if args.jora_theta_init_std is not None else {}),
+            **({"core_init_std": args.jora_core_init_std} if args.jora_core_init_std is not None else {}),
             inference_mode=False,
         )
 
         if args.jora_core == "selective_diag":
-            peft_config = JoraConfig.paper_path(**jora_kwargs)
+            # paper_path has selection hardcoded to its default; override with jora_selection_type
+            peft_config = JoraConfig.paper_path(selection=args.jora_selection_type, **jora_kwargs)
+        elif args.jora_core == "diag":
+            # diag_path hardcodes selection="none" — DO NOT pass selection from args
+            peft_config = JoraConfig.diag_path(**jora_kwargs)
         else:
-            peft_config = JoraConfig(**jora_kwargs)
+            # Other cores (block, lowrank): pass selection explicitly
+            peft_config = JoraConfig(selection=args.jora_selection_type, **jora_kwargs)
     elif args.use_peft_lora and not args.use_unsloth:
         peft_config = LoraConfig(
             lora_alpha=args.lora_alpha,
@@ -419,7 +449,7 @@ def create_and_prepare_model(args, data_args, training_args):
 
     if special_tokens is not None:
         tokenizer = AutoTokenizer.from_pretrained(
-            args.model_name_or_path,
+            _resolve_cached_model_path(args.model_name_or_path),
             pad_token=special_tokens.pad_token.value,
             bos_token=special_tokens.bos_token.value,
             eos_token=special_tokens.eos_token.value,
@@ -441,7 +471,7 @@ def create_and_prepare_model(args, data_args, training_args):
         else:
             model.resize_token_embeddings(len(tokenizer), pad_to_multiple_of=8)
     else:
-        tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(_resolve_cached_model_path(args.model_name_or_path), trust_remote_code=True)
         tokenizer.pad_token = tokenizer.eos_token
 
     if args.use_unsloth:

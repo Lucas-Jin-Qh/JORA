@@ -8,7 +8,7 @@ from peft.utils import PeftType
 
 RotationParam = Literal["cayley", "angle"]
 RotationImpl = Literal["auto", "triton", "torch"]
-CoreType = Literal["diag", "block", "lowrank", "selective_diag"]
+CoreType = Literal["diag", "block", "lowrank", "selective_diag", "coupled_pair"]
 SelectionType = Literal["topk_ema", "random", "none"]
 MagnitudeType = Literal["none", "ecd_tanh", "oer_softmax"]
 PairingStrategy = Literal["consecutive", "high_low"]
@@ -95,6 +95,7 @@ class JoraConfig(PeftConfig):
     # ---- JORA: core ----
     core: CoreType = "diag"
     zero_init_core: bool = False
+    core_init_std: float = 5e-3  # controls initialization std for diag/block/lowrank core params
     block_size: int = 4
     lowrank_r: int = 8
     lowrank_alpha: Optional[float] = None
@@ -139,7 +140,7 @@ class JoraConfig(PeftConfig):
 
     @classmethod
     def paper_path(cls, **kwargs) -> "JoraConfig":
-        """Factory for the paper-exact JORA configuration.
+        """Factory for the paper-exact JORA configuration (SelectiveDiagCore).
 
         Sets the canonical paper-path defaults:
             core="selective_diag"   — only |U|=2k params, applied to support U only
@@ -166,6 +167,82 @@ class JoraConfig(PeftConfig):
             zero_init_core=True,
             pairs_freeze_after_warmup=True,
             theta_init_std=0.0,
+        )
+        defaults.update(kwargs)
+        return cls(**defaults)
+
+    @classmethod
+    def diag_path(cls, **kwargs) -> "JoraConfig":
+        """Factory for JORA-Diag (main paper method): rotation + DiagCore.
+
+        This is the PRIMARY method for the restructured JORA paper:
+        - Rotatable basis (left + right Givens rotations)
+        - Diagonal core in the rotated basis
+        - No magnitude gating by default
+        - Small nonzero initialization for stability and symmetry-breaking
+
+        Default key parameters:
+            core="diag"
+            magnitude="none"
+            zero_init_core=True
+            theta_init_std=2e-3
+            core_init_std=5e-3
+            selection="none"
+            S_L=32, S_R=32
+
+        Use this as the main comparison baseline against LoRA / DoRA / IA3.
+
+        Example::
+
+            cfg = JoraConfig.diag_path(
+                target_modules=["q_proj", "v_proj"],
+                S_L=32, S_R=32,
+            )
+        """
+        defaults = dict(
+            core="diag",
+            magnitude="none",
+            zero_init_core=True,
+            theta_init_std=2e-3,
+            core_init_std=5e-3,
+            selection="none",
+            S_L=32,
+            S_R=32,
+            pairs_freeze_after_warmup=False,
+            lr_theta=0.01,
+            lr_core=0.05,
+        )
+        defaults.update(kwargs)
+        return cls(**defaults)
+
+    @classmethod
+    def selective_path(cls, **kwargs) -> "JoraConfig":
+        """Factory for JORA-Selective (extreme-efficiency operating point).
+
+        This is an efficiency-specific variant, NOT the main method:
+        - Extreme parameter efficiency: only 2k params per layer (vs 4k for DiagCore)
+        - Rotation pairs are selected via EMA and frozen after warmup
+        - Best for: memory-constrained scenarios, ablation of "rotation vs no-rotation"
+
+        This is NOT the main claim. Use diag_path() for the primary method.
+
+        Example::
+
+            cfg = JoraConfig.selective_path(
+                target_modules=["q_proj", "v_proj"],
+                k=8,
+                S_L=32, S_R=32,
+            )
+        """
+        defaults = dict(
+            core="selective_diag",
+            magnitude="none",
+            zero_init_core=True,
+            pairs_freeze_after_warmup=True,
+            theta_init_std=0.0,
+            selection="topk_ema",
+            warmup_steps=200,
+            t_stat=0,
         )
         defaults.update(kwargs)
         return cls(**defaults)
