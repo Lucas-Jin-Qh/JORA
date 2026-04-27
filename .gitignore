@@ -149,3 +149,5 @@ checkpoints/
 datasets/
 
 formal_runs/
+
+Auto-claude-code-research-in-sleep/*

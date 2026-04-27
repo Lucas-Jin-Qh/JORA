@@ -337,7 +337,8 @@ class JoraModel(BaseTuner):
         # theta: rotation angles — high leverage, needs lower LR
         if theta_params:
             # Use lr_theta/lr_core ratio from config to scale theta LR
-            lr_ratio = float(getattr(cfg, 'lr_theta', 1.0)) / float(getattr(cfg, 'lr_core', 1.0))
+            lr_core_val = float(getattr(cfg, 'lr_core', 1.0))
+            lr_ratio = float(getattr(cfg, 'lr_theta', 1.0)) / lr_core_val if lr_core_val != 0 else 0.0
             theta_lr = base_lr * lr_ratio
             groups.append({
                 "params": theta_params,

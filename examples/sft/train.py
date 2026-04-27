@@ -561,8 +561,9 @@ def main(model_args, data_args, training_args):
     callbacks = []
     if model_args.use_peft_jora:
         # Import JORA callback for reliable updates
-        from peft.tuners.jora.callbacks import JoraTrainerCallback
+        from peft.tuners.jora.callbacks import JoraTrainerCallback, JoraMetricsCallback
         callbacks.append(JoraTrainerCallback(model, verbose=False))
+        callbacks.append(JoraMetricsCallback(model, output_dir=training_args.output_dir, log_interval=training_args.logging_steps))
 
     trainer = SFTTrainer(
         model=model,
