@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Dict, Optional, List
 
@@ -12,7 +13,7 @@ from peft.tuners.tuners_utils import BaseTunerLayer, check_adapters_to_merge
 from .config import JoraConfig
 from .core import build_core
 from .rotation import apply_rotations
-from .selection import select_top_k_pairs_gpu, maybe_gumbel, compute_allowed_pairs
+from .selection import select_top_k_pairs_gpu, select_coupling_pairs_gpu, maybe_gumbel, compute_allowed_pairs
 from .magnitude import compute_ecd_scale, compute_oer_scale_softmax, linear_temperature_anneal
 from .utils import get_in_out_features, linear_forward
 
@@ -88,6 +89,25 @@ class _JoraAdapterState(nn.Module):
         # EMA stats for selection
         self.register_buffer("grad_row_ema", torch.zeros(self.n, device=dev, dtype=torch.float32), persistent=True)
         self.register_buffer("grad_col_ema", torch.zeros(self.m, device=dev, dtype=torch.float32), persistent=True)
+
+        # TC-CS: running mean of activations for normalized correlation score.
+        # Needed for: centered_cov[i,j] = g_cov_ema[i,j] - g_mean_ema[i] * g_mean_ema[j]
+        # Score = |centered_cov[i,j]| / sqrt(Var[i] * Var[j])
+        # Shape: (m,) per layer. persistent=False — not needed after calibration.
+        self.register_buffer(
+            "g_mean_ema",
+            torch.zeros(self.m, device=dev, dtype=torch.float32),
+            persistent=False,
+        )
+
+        # TC-CS: activation outer-product EMA for coupling subspace calibration.
+        # Shape: (m, m) per layer. persistent=False — not needed after calibration.
+        # Memory: 4 MB for d=1024, 67 MB for d=4096.
+        self.register_buffer(
+            "g_cov_ema",
+            torch.zeros((self.m, self.m), device=dev, dtype=torch.float32),
+            persistent=False,
+        )
 
         self.register_buffer("step_idx", torch.zeros((), device=dev, dtype=torch.long), persistent=True)
         self.register_buffer("ema_step_idx", torch.zeros((), device=dev, dtype=torch.long), persistent=True)
@@ -239,6 +259,18 @@ class _JoraAdapterState(nn.Module):
         else:
             self.cfg.ecd_temperature = float(new_t)
 
+    @torch.no_grad()
+    def disable_cov_ema(self):
+        """Disable g_cov_ema after calibration to reclaim GPU memory.
+
+        Sets g_cov_ema to None so Python GC can reclaim the (d, d) float32 tensor.
+        Called once when pairs are frozen and calibration is complete.
+        Idempotent — calling twice is safe.
+        """
+        if self.g_cov_ema is not None:
+            self.g_cov_ema = None
+        if self.g_mean_ema is not None:
+            self.g_mean_ema = None
 
     @torch.no_grad()
     def _update_pair_buffer(
@@ -304,6 +336,15 @@ class _JoraAdapterState(nn.Module):
         if self.cfg.selection == "none":
             return
 
+        # TC-CS: calibration_active is True when t_stat > 0 and within calibration window.
+        # Once pairs are frozen (calibration complete), it is permanently False.
+        t_stat = int(getattr(self.cfg, "t_stat", 0) or 0)
+        if t_stat > 0:
+            current_step_capped = min(int(current_step), t_stat)
+            self.cfg.calibration_active = (current_step_capped < t_stat)
+        else:
+            self.cfg.calibration_active = False
+
         # Paper path: freeze pairs after first full allocation
         if getattr(self.cfg, "pairs_freeze_after_warmup", False):
             if bool(self.pairs_frozen_flag.item()):
@@ -340,14 +381,62 @@ class _JoraAdapterState(nn.Module):
             k_L = 0
             k_R = 0
 
+        # TC-CS: cache pairing strategy to avoid repeated getattr in _update_pair_buffer
+        pairing_strategy = getattr(self.cfg, "pairing_strategy", "consecutive")
+
         if self.cfg.S_L > 0 and k_L > 0:
             self._update_pair_buffer(self.pairs_L, self.num_pairs_L, self.grad_row_ema, k_L, self.n, 'left')
+
+        # TC-CS: coupling-aware pair selection for right side (Step 2B-2)
+        # Coupling strategy only applies to the right-side (column) buffer.
+        # Left-side (row) always uses energy-based selection.
         if self.cfg.S_R > 0 and k_R > 0:
-            self._update_pair_buffer(self.pairs_R, self.num_pairs_R, self.grad_col_ema, k_R, self.m, 'right')
+            if pairing_strategy == "coupling":
+                if self.g_cov_ema is not None and self.g_mean_ema is not None:
+                    # Compute normalized correlation score matrix (Step 4.6 fix):
+                    #   centered_cov[i,j] = g_cov_ema[i,j] - g_mean_ema[i] * g_mean_ema[j]
+                    #   Var[i] = g_cov_ema[i,i] - g_mean_ema[i]^2
+                    #   score[i,j] = |centered_cov[i,j]| / sqrt(Var[i] * Var[j] + eps)
+                    # This is the Pearson correlation coefficient, which measures
+                    # dependency rather than magnitude (unlike raw outer product).
+                    mean_outer = self.g_mean_ema.unsqueeze(1) * self.g_mean_ema.unsqueeze(0)  # (m, m)
+                    centered_cov = self.g_cov_ema - mean_outer
+                    var_vals = self.g_cov_ema.diagonal() - self.g_mean_ema.pow(2)  # (m,)
+                    var_vals = var_vals.clamp(min=float(self.cfg.eps))
+                    denom = torch.sqrt(var_vals.unsqueeze(1) * var_vals.unsqueeze(0) + float(self.cfg.eps))
+                    coupling_score = centered_cov.abs() / denom
+
+                    new_pairs_R = select_coupling_pairs_gpu(
+                        coupling_score=coupling_score,
+                        k=k_R,
+                        max_features=int(self.m),
+                    )
+                    self._write_pairs(self.pairs_R, self.num_pairs_R, new_pairs_R, 'right')
+                elif self.g_cov_ema is not None:
+                    # g_mean_ema not yet initialized; warn and skip
+                    warnings.warn(
+                        "[JORA] pairing_strategy='coupling': g_mean_ema not yet initialized "
+                        "(calibration may have just started). Skipping pair update.",
+                        UserWarning,
+                    )
+                else:
+                    # Stats unavailable: warn and skip update
+                    warnings.warn(
+                        "[JORA] pairing_strategy='coupling' but g_cov_ema is None "
+                        "(not in calibration window or already freed). "
+                        "Skipping right-side pair update for this step.",
+                        UserWarning,
+                    )
+            else:
+                # Non-coupling strategies always use energy-based selection
+                self._update_pair_buffer(self.pairs_R, self.num_pairs_R, self.grad_col_ema, k_R, self.m, 'right')
 
         # Freeze after full allocation (paper path)
         if getattr(self.cfg, "pairs_freeze_after_warmup", False) and k_allow >= self.cfg.k:
             self._freeze_support_if_needed()
+            # TC-CS: calibration complete — disable g_cov_ema to reclaim memory
+            self.disable_cov_ema()
+            self.cfg.calibration_active = False
 
     def _freeze_support_if_needed(self):
         """Freeze support for SelectiveDiagCore and CoupledPairCore after calibration.
@@ -492,8 +581,9 @@ class _JoraAdapterState(nn.Module):
             delta = R_L^T @ D_sel @ R_R @ x - P_U @ x
         where D_sel = I_U + diag(delta) applied only to support U.
 
-        Legacy formula (other core types):
-            delta = R_L^T @ core(R_R @ x)  [with optional tanh]
+        Standard formula (DiagCore / BlockCore / LowRankCore):
+            delta = R_L^T @ core(R_R @ x)
+        where core is a linear operator (Diag(d), Block, or LowRank).
         """
         from .core import SelectiveDiagCore, CoupledPairCore
 
@@ -542,9 +632,7 @@ class _JoraAdapterState(nn.Module):
             y = self._apply_side_rotation(y_core, is_left_side=True)
             return y  # No tanh — preserves zero-function-change at init
         else:
-            # DiagCore / BlockCore / LowRankCore path
-            # No tanh: these cores use zero_init_core=True with small non-zero init for
-            # near-identity start. tanh would distort the learned diagonal/block/lowrank updates.
+            # DiagCore / BlockCore / LowRankCore path (additive)
             x_rot = self._apply_side_rotation(x, is_left_side=False)
             y_core = self.core.apply_to_vector(x_rot)
             y = self._apply_side_rotation(y_core, is_left_side=True)
@@ -689,6 +777,21 @@ class JoraLayer(nn.Module, BaseTunerLayer):
                         x_sq = xd.reshape(-1, st.m).float().pow(2).mean(dim=0)
                         beta = float(st.cfg.ema_beta)
                         st.grad_col_ema.lerp_(x_sq, 1.0 - beta)  # Fused EMA update for better performance
+
+                        # TC-CS: activation outer-product EMA for coupling subspace calibration.
+                        # Only runs during calibration (calibration_active=True).
+                        # g_cov_ema[i,j] = E_calibration[x_i * x_j]
+                        # Also accumulates g_mean_ema[i] = E_calibration[x_i]
+                        if (
+                            getattr(st.cfg, "pairing_strategy", "consecutive") == "coupling"
+                            and getattr(st.cfg, "calibration_active", False)
+                            and st.g_cov_ema is not None
+                        ):
+                            x_flat = xd.reshape(-1, st.m).float()  # (B*L, m)
+                            x_cov = (x_flat.T @ x_flat / max(x_flat.size(0), 1.0)).float()  # (m, m)
+                            st.g_cov_ema.lerp_(x_cov, 1.0 - beta)
+                            x_mean = x_flat.mean(dim=0).float()  # (m,)
+                            st.g_mean_ema.lerp_(x_mean, 1.0 - beta)
 
         # Ensure input dtype matches weight dtype for proper computation
         if x.dtype != self.base_layer.weight.dtype:
@@ -914,21 +1017,40 @@ class JoraLayer(nn.Module, BaseTunerLayer):
 
             return delta_weight
 
-        # Legacy path: conservative approximation
-        device = adapter_state.core.A.device if hasattr(adapter_state.core, 'A') else device
-        dtype = adapter_state.core.A.dtype if hasattr(adapter_state.core, 'A') else dtype
+        # DiagCore uses exact basis-probing, same as SelectiveDiagCore.
+        # compute_delta(x) is the exact linear map Δ(x) = R_L^T @ Diag(d) @ R_R @ x (additive).
+        # Basis-probing recovers the exact delta weight matrix W_Δ where Δ(x) = x @ W_Δ^T.
+        # This is the same approach SelectiveDiagCore uses (proven exact for nonzero theta).
+        #
+        # Note: DiagCore supports rectangular layers (n != m), unlike SelectiveDiagCore.
+        # The probe uses batched one-hot basis vectors [chunk, m] -> [chunk, n].
+        # Transpose + scatter gives delta_weight [n, m] matching base weight layout.
 
-        # Extract core transformation matrix
-        core_matrix = adapter_state.core.forward()  # (n_out, n_in)
+        # Ensure Python-side pair counters are synced before probing (safe: no gradients here).
+        adapter_state._num_pairs_py_initialized = True
+        adapter_state._num_pairs_py = {
+            'left': int(adapter_state.num_pairs_L.item()),
+            'right': int(adapter_state.num_pairs_R.item())
+        }
 
-        # Estimate rotation effect magnitude from active parameters
-        rotation_scale = self._estimate_rotation_effect_magnitude(adapter_state)
+        delta_weight = torch.zeros(n_out, n_in, device=device, dtype=dtype)
 
-        # Combine core matrix with rotation effects
-        delta_weight = core_matrix * rotation_scale
+        chunk_size = min(256, n_in)
+        for start in range(0, n_in, chunk_size):
+            end = min(start + chunk_size, n_in)
+            # Batch of one-hot basis vectors: shape [chunk, n_in]
+            basis = torch.zeros(end - start, n_in, device=device, dtype=dtype)
+            local_rows = torch.arange(end - start, device=device)
+            basis_indices = torch.arange(start, end, device=device)
+            basis[local_rows, basis_indices] = 1.0
 
-        # Apply very conservative scaling for tanh non-linearity
-        delta_weight *= 0.05
+            # Δ(basis_i) = adapter contribution for basis vector i
+            # Shape: [chunk, n_out]
+            delta_chunk = adapter_state.compute_delta(basis).to(dtype)
+
+            # Scatter each output row of delta_chunk into the corresponding column
+            # of delta_weight. After transpose: delta_chunk.T [n_out, chunk]
+            delta_weight[:, start:end] = delta_chunk.t()
 
         return delta_weight
 

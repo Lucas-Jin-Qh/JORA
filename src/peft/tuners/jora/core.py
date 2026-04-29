@@ -267,7 +267,12 @@ class CoupledPairCore(nn.Module):
 
 
 class DiagCore(nn.Module):
-    """Diagonal core D (stored as its diagonal)."""
+    """Diagonal core D (stored as its diagonal), in additive form.
+
+    The core stores Diag(d) as diag_params, where d is the trainable
+    deviation from zero. At init (d=0), the core acts as zero-operator
+    (additive form: Δ(x) = Diag(d) @ x, so Δ(x) = 0 when d = 0).
+    """
 
     def __init__(self, n: int, m: int, device, dtype, zero_init: bool = False, init_std: float = 5e-3):
         super().__init__()
@@ -287,12 +292,18 @@ class DiagCore(nn.Module):
             DeprecationWarning,
             stacklevel=2
         )
-        D = torch.zeros(self.n, self.m, device=self.diag_params.device, dtype=self.diag_params.dtype)
+        # Residualized form: D = I + Diag(d)
+        # Only square part (min(n,m) x min(n,m)) is active; rest is zeros.
         d_len = self.diag_params.size(0)
-        D[:d_len, :d_len] = torch.diag(self.diag_params)
+        I = torch.eye(d_len, device=self.diag_params.device, dtype=self.diag_params.dtype)
+        diag_matrix = torch.diag(self.diag_params)
+        D = torch.zeros(self.n, self.m, device=self.diag_params.device, dtype=self.diag_params.dtype)
+        D[:d_len, :d_len] = I + diag_matrix
         return D
 
     def get_row_slice(self, start: int, end: int) -> Tensor:
+        # Residualized form: D = I + Diag(d)
+        # Row i has only one nonzero at column i: value 1 + d[i] (if i < d_len)
         rows = end - start
         D_slice = torch.zeros(rows, self.m, device=self.diag_params.device, dtype=self.diag_params.dtype)
         if rows <= 0:
@@ -301,17 +312,30 @@ class DiagCore(nn.Module):
         for r in range(rows):
             i = start + r
             if i < d_len and i < self.m:
-                D_slice[r, i] = self.diag_params[i]
+                D_slice[r, i] = 1.0 + self.diag_params[i]
+            elif i < self.m:
+                D_slice[r, i] = 1.0  # identity part only (d=0 beyond learned range)
         return D_slice
 
     def apply_to_vector(self, x: Tensor) -> Tensor:
-        # y = x @ D^T; for diagonal, this is elementwise on first min(n,m)
+        # Core output: D @ x where D = I + Diag(d).
+        # Returns (I + Diag(d)) @ x = x + d * x (elementwise, learned range).
+        # At d=0 (zero_init_core=True): returns x. Delta will then be
+        # delta = R_L^T @ x @ R_R - x (subtracted in compute_delta).
+        # Wait — no subtraction here. compute_delta() computes the additive
+        # delta: delta = R_L^T @ apply_to_vector(x_rot) @ R_R.
+        # For zero-function-change at init, apply_to_vector should return x at d=0.
+        # But the additive formula is: delta = R_L^T @ Diag(d) @ R_R @ x.
+        # At d=0: delta = 0. So apply_to_vector should return Diag(d) @ x.
         d_len = self.diag_params.size(0)
-        y_first = x[..., :d_len] * self.diag_params
+        x_first = x[..., :d_len]
+        y_first = x_first * self.diag_params  # = d * x (not (1+d) * x)
         if self.n > d_len:
-            pad_shape = (*x.shape[:-1], self.n - d_len)
-            pad = torch.zeros(pad_shape, device=x.device, dtype=x.dtype)
-            return torch.cat([y_first, pad], dim=-1)
+            n_pad = self.n - d_len
+            y_rest = torch.zeros(
+                (*x.shape[:-1], n_pad), device=x.device, dtype=x.dtype,
+            )
+            return torch.cat([y_first, y_rest], dim=-1)
         return y_first
 
 class BlockCore(nn.Module):

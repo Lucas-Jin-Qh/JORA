@@ -20,7 +20,10 @@ import re
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
+try:
+    from diffusers import StableDiffusionPipeline
+except (ImportError, RuntimeError):
+    StableDiffusionPipeline = None
 from torch import nn
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 

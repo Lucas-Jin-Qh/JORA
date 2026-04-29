@@ -18,7 +18,10 @@ from dataclasses import asdict, replace
 import numpy as np
 import pytest
 import torch
-from diffusers import AutoModel, StableDiffusionPipeline
+try:
+    from diffusers import AutoModel, StableDiffusionPipeline
+except (ImportError, RuntimeError):
+    AutoModel = StableDiffusionPipeline = None
 
 from peft import (
     BOFTConfig,
@@ -221,21 +224,22 @@ def skip_if_not_lora(config_cls):
         pytest.skip("Skipping test because it is only applicable to LoraConfig")
 
 
-class TestStableDiffusionModel(PeftCommonTester):
-    r"""
-    Tests that diffusers StableDiffusion model works with PEFT as expected.
-    """
+if StableDiffusionPipeline is not None:
+    class TestStableDiffusionModel(PeftCommonTester):
+        r"""
+        Tests that diffusers StableDiffusion model works with PEFT as expected.
+        """
 
-    transformers_class = StableDiffusionPipeline
-    sd_model = StableDiffusionPipeline.from_pretrained("hf-internal-testing/tiny-sd-pipe")
+        transformers_class = StableDiffusionPipeline
+        sd_model = StableDiffusionPipeline.from_pretrained("hf-internal-testing/tiny-sd-pipe")
 
-    def instantiate_sd_peft(self, model_id, config_cls, config_kwargs):
-        # Instantiate StableDiffusionPipeline
-        if model_id == "hf-internal-testing/tiny-sd-pipe":
-            # in CI, this model often times out on the hub, let's cache it
-            model = copy.deepcopy(self.sd_model)
-        else:
-            model = self.transformers_class.from_pretrained(model_id)
+        def instantiate_sd_peft(self, model_id, config_cls, config_kwargs):
+            # Instantiate StableDiffusionPipeline
+            if model_id == "hf-internal-testing/tiny-sd-pipe":
+                # in CI, this model often times out on the hub, let's cache it
+                model = copy.deepcopy(self.sd_model)
+            else:
+                model = self.transformers_class.from_pretrained(model_id)
 
         config_kwargs = config_kwargs.copy()
         text_encoder_kwargs = config_kwargs.pop("text_encoder")

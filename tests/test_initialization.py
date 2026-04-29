@@ -3320,8 +3320,12 @@ class TestEvaInitialization:
     LORA_DIM = 8
     LORA_ALPHA = 1
     DEVICE = infer_device()
-    # for caching purposes:
-    _dataset = load_dataset_english_quotes()["train"]
+
+    @staticmethod
+    def _lazy_dataset():
+        if not hasattr(TestEvaInitialization, "_dataset_cache"):
+            TestEvaInitialization._dataset_cache = load_dataset_english_quotes()["train"]
+        return TestEvaInitialization._dataset_cache
 
     @pytest.fixture
     def tokenizer(self):
@@ -3331,10 +3335,11 @@ class TestEvaInitialization:
 
     @pytest.fixture
     def dataset(self, tokenizer):
+        _dataset = self._lazy_dataset()
         # concatenate examples
         examples = []
         example = ""
-        for data in self._dataset:
+        for data in _dataset:
             if len(example) >= self.MAX_LENGTH:
                 examples.append(example)
                 example = ""

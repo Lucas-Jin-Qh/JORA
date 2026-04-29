@@ -257,7 +257,7 @@ def create_and_prepare_model(args, data_args, training_args):
         # Prepare model loading arguments
         model_kwargs = {
             "trust_remote_code": True,
-            "dtype": dtype,
+            "torch_dtype": dtype,
         }
         if args.use_flash_attn:
             if torch.xpu.is_available():

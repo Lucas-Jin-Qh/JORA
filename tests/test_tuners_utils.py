@@ -20,7 +20,10 @@ from copy import deepcopy
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
+try:
+    from diffusers import StableDiffusionPipeline
+except (ImportError, RuntimeError):
+    StableDiffusionPipeline = None
 from parameterized import parameterized
 from torch import nn
 from transformers import (

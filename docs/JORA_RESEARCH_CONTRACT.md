@@ -1,6 +1,6 @@
 # JORA Research Contract
 
-Last updated: 2026-04-26 (formula/merge tightening after FORMULA_AUDIT)
+Last updated: 2026-04-28 (M0 correctness gate PASS)
 
 This document freezes the current JORA project into a claim-driven research contract. Its purpose is to prevent paper writing, experiment planning, and implementation work from drifting beyond what the code and evidence currently support.
 
@@ -145,6 +145,7 @@ Do not let BlockCore, LowRankCore, and SelectiveDiagCore dilute the main method 
 | SelectiveDiagCore has exact merge | Allowed | Basis-probing implementation + unit test | Supported by code + test_selective_merge_equals_forward | "SelectiveDiagCore supports exact merge via basis probing." |
 | JORA-Diag forward is additive, not residualized | Allowed | Formula audit | Supported by code inspection | "JORA-Diag forward: Δ(x)=R_L^T Diag(d)R_R x; no residualization term." |
 | Selective variant is the main paper path | Not allowed as mainline | Mainline empirical repositioning back to selective + new evidence | Not the current project direction | "Selective is a variant, not the current mainline." |
+| TC-CS coupling subspace rotation provides meaningful differentiation | Not allowed | Pair overlap < 80% on real activations, training benefit demonstrated | Not supported — Step 4.7 offline diagnostic confirms 100% overlap (rank-1 structural collapse), 2.7e-6 training delta | "TC-CS mechanism gate failed; coupling signal collapses to energy-based ordering. Documented as negative result / future work." |
 
 ## 5. Required experiments before paper writing
 
@@ -152,29 +153,11 @@ These are the minimum experiments that should be considered required before draf
 
 ### Experiment block 1 — Matched JORA-Diag vs JORA-NoRot evaluation
 **Purpose**: Resolve the main mechanism question.
-
-Required properties:
-- Same base model
-- Same dataset
-- Same training horizon
-- Same seed protocol
-- Same evaluation metrics
-- Same reporting format
-
-Minimum outcome needed:
-- Either show a real JORA-Diag advantage,
-- or formally accept that JORA-NoRot matches it and rewrite the story accordingly.
+**Status: SETTLED** — R006/R007 (seed 42, 3ep) complete. ON ≈ NoRot in quality; ON is 2.86× slower. Rotation verdict: demote to optional basis reparameterization.
 
 ### Experiment block 2 — Longer-horizon matched ON/OFF comparison
 **Purpose**: Avoid over-interpreting 1-epoch null results if convergence behavior differs later.
-
-Required properties:
-- Matched longer-horizon ON vs OFF run pair
-- Same final evaluation targets
-- Runtime and quality both reported
-
-Minimum outcome needed:
-- Determine whether rotation only looks neutral early, or remains neutral after longer training.
+**Status: SUPERSEDED** — 3ep evidence (E1/E2) is now available. 3ep verdict is the same as 1ep: null quality effect, negative runtime. No further rotation ON/OFF training runs are needed.
 
 ### Experiment block 3 — Formula audit / implementation contract
 **Purpose**: Prevent paper-method mismatch.
@@ -193,15 +176,24 @@ Required deliverable: (superseded by actual artifact)
 - `docs/FORMULA_AUDIT.md` records all formulas, merge semantics, and required test gates.
 
 ### Experiment block 4 — Basic deployment sanity package
-**Purpose**: Support any deployment-oriented wording.
+**Status: PASS (27/27 tests, 2026-04-28)**
 
 Required checks:
 - save/load roundtrip
 - merge/unmerge sanity
 - no obvious path mismatch between train-time and inference-time adapter application
 
-Minimum outcome needed:
-- Know exactly which variants can support strong merge/deployment wording.
+**Minimum outcome**: Know exactly which variants can support strong merge/deployment wording.
+
+**Results**:
+- `SelectiveDiagCore` merge: exact via basis probing — only variant with verified exact merge.
+- `DiagCore` (JORA-Diag mainline) merge: approximate via `_compute_weight_delta_simple` (0.05x scaling approximation) — NOT exact.
+- `NoRot` merge/unmerge: exact.
+- Magnitude variants (ecd_tanh, oer_softmax): survive save/load; unmerge has ~5-10% relative error.
+
+**Allowed wording**: "JORA supports weight-space merging; merge semantics differ by variant. `SelectiveDiagCore` supports exact merge via basis probing. `DiagCore` (JORA-Diag mainline) uses a conservative approximate merge path."
+
+**Forbidden wording**: "JORA-Diag has exact merge equivalence" (the mainline DiagCore path is approximate).
 
 ### Optional but high-value follow-up
 These are useful after the mechanism verdict, not before it.
@@ -275,12 +267,15 @@ Required defense:
 - No strong rotation narrative is allowed unless matched evaluation changes the verdict.
 - If JORA-NoRot remains equal or better, the paper must reposition around diagonal adaptation as the main effective mechanism.
 - If the evidence stays mixed, the project should prefer a narrower but honest paper over a broader but fragile one.
+- TC-CS is paused. It may not re-enter the active experiment pipeline without a fundamentally different candidate-pool/score design that can pass a read-only overlap gate on real activations before any training run is launched.
 
 ## Current bottom line
 
-At the current state of the project:
+At the current state of the project (updated 2026-04-28):
 - `JORA-Diag` is the main method.
 - `JORA-NoRot` is the claim-determining baseline.
 - `DiagCore` is the main effective capacity hypothesis.
-- Rotation is currently only justified as optional basis reparameterization.
+- Rotation is currently only justified as optional basis reparameterization; matched 3ep evidence shows no quality advantage and 2.86× runtime cost.
+- TC-CS rotation revival attempt: **failed mechanism gate** (Step 4.7 failure analysis, 2026-04-28). Pair overlap = 100%, training loss delta = 2.7e-6, rank-1 structural collapse confirmed. Requires fundamentally different candidate-pool/score design before reconsideration.
+- **M0 correctness gate: PASS** (27/27 tests, 2026-04-28). save/load roundtrip and merge equivalence verified. Exact merge only for `SelectiveDiagCore`; DiagCore (JORA-Diag mainline) uses approximate merge — not exact.
 - The paper is not allowed to claim more than the evidence supports.

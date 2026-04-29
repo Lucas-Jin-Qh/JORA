@@ -1,8 +1,10 @@
 # FORMULA_AUDIT
 
-Last updated: 2026-04-26
+**Last updated: 2026-04-28**
 
-This is a read-only correctness audit of the current JORA implementation.
+**Option C (residualized DiagCore)**: CATASTROPHIC FAIL. DiagCore reverted to additive default (2026-04-28). See `docs/JORA_OPTION_C_POSTMORTEM.md`. The C1.5 residualized implementation and C1.6 exact-merge patch were both reverted; the C1.6 basis-probing merge fix was retained as it is a standalone improvement.
+
+This document is the read-only correctness audit of the current JORA implementation.
 
 Audit scope:
 - `src/peft/tuners/jora/layer.py`
@@ -76,12 +78,41 @@ and the full adapted layer is:
 - `DiagCore.apply_to_vector()` multiplies by raw `diag_params`, not by `(1 + diag_params)`.
 - Therefore the current JORA-Diag is an **additive diagonal operator in a rotated basis**, not a residualized identity-centered operator.
 
-### Final verdict for JORA-Diag
+### Final verdict for JORA-Diag (pre-C1.5, additive form)
 The correct current formula is:
 - `Δ(x) = R_L^⊤ Diag(d) R_R x`
 
-The following formula is **not** implemented for current JORA-Diag:
+The following formula was **not** implemented before C1.5:
 - `Δ(x) = R_L^⊤ Diag(1+d) R_R x - x`
+
+---
+
+## 1b. Exact forward formula for JORA-Diag (RESIDUALIZED, C1.5 — REVERTED 2026-04-28)
+
+**Status**: REVERTED. This section is kept for historical record only.
+
+The Option C residualized refactor was attempted but catastrophically failed (eval loss 15.7/19.2 vs base 5.5). DiagCore has been reverted to the additive form above. Do not cite the formulas in this section as current.
+
+### Historical implementation (before revert)
+
+The DiagCore `apply_to_vector()` was temporarily changed to:
+```python
+y_first = x_first + x_first * self.diag_params  # = x_first * (1 + d)
+```
+
+The `compute_delta()` path was temporarily changed to:
+```python
+x_rot = self._apply_side_rotation(x, is_left_side=False)
+y_core = self.core.apply_to_vector(x_rot)  # (I + Diag(d)) @ x_rot
+y = self._apply_side_rotation(y_core, is_left_side=True)
+delta = y.to(x.dtype) - x
+return delta
+```
+
+The intended formula was:
+- `Δ_diag(x) = R_L^⊤ (I + Diag(d)) R_R x - x`
+
+**Why it failed**: `R_L^T @ R_R ≠ I` when left/right rotation pairs are independently sampled. This caused the residualized operator to catastrophically reshape hidden-state geometry. See `docs/JORA_OPTION_C_POSTMORTEM.md`.
 
 ---
 
@@ -172,22 +203,13 @@ and unmerge subtracts the same stored/computed delta:
 - `W_0 = W_merged - ΔW`
 
 ### 4.2 Merge formula for JORA-Diag / NoRot / Block / LowRank
-For non-selective cores, `_compute_weight_delta_simple()` uses a **legacy approximation path**.
 
-What the code conceptually wants is a weight-space operator corresponding to the forward delta:
+**C1.6 fix (preserved after Option C revert)**: DiagCore now uses exact basis-probing merge, the same method as SelectiveDiagCore. Non-Selective cores are also covered by the same exact path in `_compute_weight_delta_simple`.
+
+For DiagCore, the intent is a weight-space operator corresponding to the forward delta:
 - `Δ(x) = R_L^⊤ C R_R x`
 
-However, the implementation comment explicitly states:
-- for other core types, merge uses a **conservative approximation**
-
-Specifically:
-- it extracts a dense core matrix via `core.forward()`
-- estimates a rotation effect magnitude heuristically
-- combines them conservatively rather than reconstructing the exact dense linear map by probing
-
-Therefore:
-- the intended merged formula is approximately `ΔW ≈ operator corresponding to R_L^⊤ C R_R`
-- but the current implementation is **not an exact analytical reconstruction** for non-selective cores
+The basis-probing reconstruction in `_compute_weight_delta_simple` recovers the exact dense linear map by probing with one-hot basis vectors. This matches `compute_delta(x)` for all nonzero theta values.
 
 ### 4.3 Merge formula for JORA-Selective
 For `SelectiveDiagCore`, merge is handled differently.
@@ -288,27 +310,26 @@ Thus zero function change holds.
 
 This is the most important section in the audit.
 
-### Mismatch A — JORA-Diag is not the residualized full-support paper formula
-Intended paper-clean full-support formula would be:
-- `Δ(x) = R_L^⊤ Diag(1+d) R_R x - x`
+### Mismatch A — JORA-Diag was attempted as residualized full-support (Option C) but failed
 
-Current JORA-Diag implementation is:
-- `Δ(x) = R_L^⊤ Diag(d) R_R x`
-
-These are not the same.
+A full-support residualized refactor was attempted:
+- Intended paper-clean formula: `Δ(x) = R_L^⊤ Diag(1+d) R_R x - x`
+- Current JORA-Diag implementation: `Δ(x) = R_L^⊤ Diag(d) R_R x`
+- **Outcome**: Catastrophic failure (loss 15.7/19.2 vs base 5.5). Option C reverted 2026-04-28.
 
 Consequences:
-- the current mainline is an additive operator, not a residualized identity-centered one
+- The current mainline is additive, not residualized
 - `DiagCore` uses raw diagonal coefficients, not `(1 + d)`
-- paper text must not claim the residualized full-support formula unless code is changed
+- Paper text must not claim the residualized full-support formula
 
-### Mismatch B — merge semantics are asymmetric across variants
-- Selective has near-exact forward-equivalent merge construction.
-- Non-selective variants use a conservative approximation path.
+### Mismatch B — merge semantics differ across variants
+- Selective has forward-equivalent merge by exact basis probing.
+- DiagCore now also uses exact basis-probing (C1.6 fix, preserved after Option C revert).
+- BlockCore and LowRankCore use the same basis-probing path.
 
 Consequences:
-- a blanket “exact mergeability” claim for all current JORA variants is unsafe
-- deployment wording must be variant-specific
+- A uniform “exact mergeability” claim is now safe for DiagCore and SelectiveDiagCore.
+- Deployment wording should still note that rectangular layers are not supported for Selective.
 
 ### Mismatch C — “zero-change init” means different things across variants
 - Diag / NoRot / Block / LowRank: zero-change comes from a zero additive operator
@@ -331,25 +352,12 @@ Current code does not fully realize that family-level unification.
 
 These are not mandatory for running experiments, but they are mandatory if the paper wants a cleaner theory-to-code match.
 
-### Required fix 1 — Decide whether JORA-Diag stays additive or is refactored to residualized full-support
-Current status:
-- the code is additive
-- some intended paper narratives assume residualized full-support
+### Required fix 1 — Residualized DiagCore (Option C) — REVERTED 2026-04-28
 
-Required decision:
-- either keep additive DiagCore and write the paper accordingly
-- or refactor DiagCore to implement
-  - `Δ(x) = R_L^⊤ Diag(1+d) R_R x - x`
-  and rerun correctness + experiment gates
+**Status**: REVERTED. Catastrophic failure (loss 15.7/19.2 vs base 5.5). The residualized refactor was entirely reverted; code default is now additive DiagCore. See `docs/JORA_OPTION_C_POSTMORTEM.md`.
 
 ### Required fix 2 — Make merge semantics explicit per variant
-Current status:
-- Selective has a distinct exact merge strategy
-- other cores do not
-
-Required action:
-- either implement exact dense-operator reconstruction for DiagCore/BlockCore/LowRankCore
-- or document clearly that merge equivalence is stronger for Selective than for current DiagCore mainline
+**Status**: DONE. C1.6 implemented exact basis-probing for all cores (DiagCore, BlockCore, LowRankCore, SelectiveDiagCore) in _compute_weight_delta_simple. The basis-probing path is the unified approach applied uniformly. SelectiveDiagCore and DiagCore are now on equal footing for exact mergeability.
 
 ### Required fix 3 — Freeze paper wording around zero-init
 Current status:
@@ -430,12 +438,12 @@ If any of these fail, experiment conclusions should be treated as provisional.
 
 ## Final answers to the critical questions
 
-### Q1. JORA-Diag 当前 forward 到底是哪个？
-It is currently:
-- `Δ(x)=R_L^⊤ Diag(d) R_R x`
+### Q1. JORA-Diag 当前 forward 到底是哪个？（After C1.5）
 
-It is **not** currently:
-- `Δ(x)=R_L^⊤ Diag(1+d) R_R x - x`
+After the C1.5 residualized refactor:
+- `Δ(x)=R_L^⊤ (I+Diag(d)) R_R x - x`
+
+The old additive formula (`Δ=R_L^⊤ Diag(d) R_R x`) is **no longer current**.
 
 ### Q2. NoRot 是不是严格对应 `Diag(d)x`？
 Yes.
@@ -449,7 +457,7 @@ Current Selective is:
 
 ### Q4. merge 是否和 forward 等价？
 - **Selective**: yes, by exact basis probing construction for supported shapes.
-- **Current DiagCore mainline**: not guaranteed exact in the same way; current merge path is conservative/approximate.
+- **DiagCore (current)**: yes, C1.6 exact basis-probing merge is preserved after Option C revert.
 
 ### Q5. zero-init 是否真的 zero function change？
 - **Diag / NoRot / Block / LowRank with zero core init**: yes.
@@ -466,4 +474,6 @@ The current JORA codebase supports the following safe summary:
 - `JORA-NoRot` is exactly the diagonal-only baseline for that additive path.
 - `JORA-Selective` is the residualized paper-exact selective-support variant.
 - The current codebase does **not** justify writing one unified residualized formula for all variants.
+- Option C (residualized full-support DiagCore) was attempted and catastrophically failed. The revert is complete.
+- C1.6 exact basis-probing merge is preserved and applies uniformly to DiagCore and SelectiveDiagCore.
 - This audit is the correctness gate that should be respected before experiments are interpreted or papers are written.

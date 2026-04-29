@@ -9,11 +9,24 @@ Usage:
     python scripts/run_jora_exp.py configs/run_diag_main.json --gpu 0 --max_steps 5
     python scripts/run_jora_exp.py configs/run_diag_main.json --gpu 0  # full run
 """
+import os
+import sys
+from pathlib import Path
+
+_PEFT_JORA_PYTHONS = [
+    Path("/home/jqh/miniconda3/envs/peft-jora/bin/python"),
+    Path("/home/jqh/miniconda3/envs/peft-jora/bin/python3"),
+]
+for _p in _PEFT_JORA_PYTHONS:
+    if _p.exists():
+        _resolved = str(_p)
+        if _resolved != sys.executable:
+            os.execv(_resolved, [_resolved, __file__] + sys.argv[1:])
+        break
+
 import argparse
 import json
-import os
 import subprocess
-import sys
 
 
 def load_json_stripped(path):
@@ -74,11 +87,10 @@ def main():
         temp_path,
     ]
 
-    # Environment: GPU, offline HF
+    # Environment: GPU, offline wandb, HF endpoint (mirror)
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
-    env["HF_HUB_OFFLINE"] = "1"
-    env["TRANSFORMERS_OFFLINE"] = "1"
+    env["HF_ENDPOINT"] = "https://hf-mirror.com"
     env["WANDB_MODE"] = "offline"
 
     cmd_str = " ".join(cmd)

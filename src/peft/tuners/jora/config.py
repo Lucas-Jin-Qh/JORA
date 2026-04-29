@@ -130,6 +130,17 @@ class JoraConfig(PeftConfig):
 
     # ---- misc ----
     single_sided: Literal["none", "left", "right"] = "none"
+
+    # ---- TC-CS: coupling subspace pairing ----
+    # pairing_strategy: selects which scoring function to use for rotation pair selection.
+    #   "consecutive": energy[i] * energy[j] — existing importance-based (default)
+    #   "high_low":     top-i with bottom-i — existing redistribution strategy
+    #   "coupling":     activation outer-product EMA based — TC-CS coupling score
+    pairing_strategy: Literal["consecutive", "high_low", "coupling"] = "consecutive"
+    # calibration_active: internal runtime sentinel; True during t_stat steps when
+    # g_cov_ema is accumulating. Set by layer.py; not user-facing.
+    calibration_active: bool = False
+
     eps: float = 1e-8
 
     # ---- Legacy compatibility fields (deprecated) ----
